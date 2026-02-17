@@ -1,0 +1,280 @@
+import { chunkBuffer, splitTextForSpeech } from "../../lib/audio";
+import { synthesizeSpeechAudio } from "../../lib/bedrock/audio";
+import { generateDialogTurn } from "../../lib/bedrock/dialog";
+import { appConfig } from "../../lib/config";
+import { buildSceneSetup } from "../../lib/prompts";
+import {
+  appendSessionTurn,
+  getSession,
+  markSessionEnded,
+  markSessionError,
+  markSessionStarted
+} from "../../lib/session-store";
+import { logError, logInfo, toErrorMetadata } from "../../lib/telemetry";
+import type { Speaker } from "../../lib/types";
+import type { ServerWsEvent } from "../ws/protocol";
+
+declare global {
+  var __POCKET_PANEL_RUNNING_SESSIONS__: Set<string> | undefined;
+}
+
+const runningSessions = globalThis.__POCKET_PANEL_RUNNING_SESSIONS__ ?? new Set<string>();
+globalThis.__POCKET_PANEL_RUNNING_SESSIONS__ = runningSessions;
+
+const WS_OPEN = 1;
+
+const getLiveSocket = (sessionId: string) => {
+  const session = getSession(sessionId);
+  if (!session?.socket || session.socket.readyState !== WS_OPEN) {
+    return null;
+  }
+  return session.socket;
+};
+
+const sendEvent = (sessionId: string, event: ServerWsEvent): void => {
+  const socket = getLiveSocket(sessionId);
+  if (!socket) {
+    throw new Error(`No active WebSocket for session ${sessionId}`);
+  }
+  socket.send(JSON.stringify(event));
+};
+
+const isSessionClosed = (sessionId: string): boolean => getLiveSocket(sessionId) === null;
+
+const streamSegmentAudio = async (params: {
+  sessionId: string;
+  speaker: Speaker;
+  turnIndex: number;
+  segmentIndex: number;
+  segmentText: string;
+  isFinalSegment: boolean;
+}): Promise<void> => {
+  const { sessionId, speaker, turnIndex, segmentIndex, segmentText, isFinalSegment } = params;
+  logInfo("orchestrator", "Synthesizing segment audio", {
+    sessionId,
+    speaker,
+    turnIndex,
+    segmentIndex,
+    isFinalSegment,
+    segmentTextLength: segmentText.length,
+    segmentTextPreview: segmentText.slice(0, 160)
+  });
+
+  try {
+    const { audioBytes, mimeType } = await synthesizeSpeechAudio(segmentText, speaker);
+    const chunks = chunkBuffer(audioBytes, appConfig.conversation.wsAudioChunkBytes);
+
+    logInfo("orchestrator", "Segment audio synthesized", {
+      sessionId,
+      speaker,
+      turnIndex,
+      segmentIndex,
+      isFinalSegment,
+      mimeType,
+      audioBytesLength: audioBytes.length,
+      wsChunkCount: chunks.length,
+      wsAudioChunkBytes: appConfig.conversation.wsAudioChunkBytes
+    });
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      if (isSessionClosed(sessionId)) {
+        throw new Error("WebSocket closed while streaming audio");
+      }
+
+      if (i === 0 || i === chunks.length - 1) {
+        logInfo("orchestrator", "Sending websocket audio chunk", {
+          sessionId,
+          speaker,
+          turnIndex,
+          segmentIndex,
+          chunkIndex: i,
+          chunkBytesLength: chunks[i].length,
+          isFinalChunk: i === chunks.length - 1,
+          isFinalSegment: i === chunks.length - 1 && isFinalSegment
+        });
+      }
+
+      sendEvent(sessionId, {
+        type: "AUDIO_CHUNK",
+        speaker,
+        turnIndex,
+        segmentIndex,
+        chunkIndex: i,
+        chunkBase64: Buffer.from(chunks[i]).toString("base64"),
+        mimeType,
+        isFinalChunk: i === chunks.length - 1,
+        isFinalSegment: i === chunks.length - 1 && isFinalSegment
+      });
+    }
+  } catch (error) {
+    logError("orchestrator", "Segment audio pipeline failed", {
+      sessionId,
+      speaker,
+      turnIndex,
+      segmentIndex,
+      isFinalSegment,
+      segmentTextLength: segmentText.length,
+      ...toErrorMetadata(error)
+    });
+    throw error;
+  }
+};
+
+const runSessionConversation = async (sessionId: string): Promise<void> => {
+  const session = getSession(sessionId);
+  if (!session) {
+    return;
+  }
+
+  markSessionStarted(sessionId);
+  sendEvent(sessionId, {
+    type: "SESSION_READY",
+    sessionId,
+    mode: session.mode,
+    topicBreadcrumb: session.topicBreadcrumb
+  });
+
+  logInfo("orchestrator", "Session started", {
+    sessionId,
+    modeId: session.mode.id
+  });
+
+  try {
+    const deadlineMs = Date.now() + appConfig.conversation.maxDurationSeconds * 1000;
+
+    for (let turnIndex = 1; turnIndex <= appConfig.conversation.totalTurns; turnIndex += 1) {
+      if (isSessionClosed(sessionId)) {
+        markSessionEnded(sessionId, "closed");
+        return;
+      }
+      if (Date.now() >= deadlineMs) {
+        break;
+      }
+
+      const speaker: Speaker = turnIndex % 2 === 1 ? "A" : "B";
+      sendEvent(sessionId, {
+        type: "SPEAKER_CHANGE",
+        speaker,
+        turnIndex
+      });
+
+      const activeSession = getSession(sessionId);
+      if (!activeSession) {
+        return;
+      }
+
+      const turnText = await generateDialogTurn({
+        topic: activeSession.prompt,
+        mode: activeSession.mode,
+        speaker,
+        turnIndex,
+        totalTurns: appConfig.conversation.totalTurns,
+        history: activeSession.turns
+      });
+
+      appendSessionTurn(sessionId, speaker, turnIndex, turnText);
+      logInfo("orchestrator", "Generated dialog turn", {
+        sessionId,
+        speaker,
+        turnIndex,
+        turnTextLength: turnText.length,
+        turnTextPreview: turnText.slice(0, 180)
+      });
+
+      const segments = splitTextForSpeech(turnText);
+      if (segments.length === 0) {
+        logInfo("orchestrator", "No speakable segments produced for turn", {
+          sessionId,
+          speaker,
+          turnIndex
+        });
+        continue;
+      }
+
+      if (turnIndex === 1 && speaker === "A") {
+        segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
+        logInfo("orchestrator", "Prepended scene setup segment for first turn", {
+          sessionId,
+          speaker,
+          turnIndex
+        });
+      }
+
+      logInfo("orchestrator", "Turn segmented for speech synthesis", {
+        sessionId,
+        speaker,
+        turnIndex,
+        segmentCount: segments.length,
+        segmentLengths: segments.map((segment) => segment.length)
+      });
+
+      for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+        if (Date.now() >= deadlineMs) {
+          logInfo("orchestrator", "Reached conversation deadline while streaming segments", {
+            sessionId,
+            speaker,
+            turnIndex,
+            segmentIndex
+          });
+          break;
+        }
+        await streamSegmentAudio({
+          sessionId,
+          speaker,
+          turnIndex,
+          segmentIndex,
+          segmentText: segments[segmentIndex],
+          isFinalSegment: segmentIndex === segments.length - 1
+        });
+      }
+    }
+
+    if (!isSessionClosed(sessionId)) {
+      sendEvent(sessionId, {
+        type: "SESSION_END",
+        reason: "completed"
+      });
+    }
+    markSessionEnded(sessionId, "completed");
+    logInfo("orchestrator", "Session completed", { sessionId });
+  } catch (error) {
+    const baseMessage = error instanceof Error ? error.message : String(error);
+    const causeMessage = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;
+    const message = causeMessage
+      ? `Conversation failed: ${baseMessage}. Cause: ${causeMessage}`
+      : `Conversation failed: ${baseMessage}`;
+    markSessionError(sessionId, message);
+    logError("orchestrator", message, {
+      sessionId,
+      ...toErrorMetadata(error)
+    });
+
+    const socket = getLiveSocket(sessionId);
+    if (socket) {
+      socket.send(
+        JSON.stringify({
+          type: "ERROR",
+          message
+        } satisfies ServerWsEvent)
+      );
+      socket.send(
+        JSON.stringify({
+          type: "SESSION_END",
+          reason: "error"
+        } satisfies ServerWsEvent)
+      );
+    }
+    markSessionEnded(sessionId, "error");
+  }
+};
+
+export const startConversationIfNeeded = (sessionId: string): void => {
+  if (runningSessions.has(sessionId)) {
+    return;
+  }
+
+  runningSessions.add(sessionId);
+  void runSessionConversation(sessionId).finally(() => {
+    runningSessions.delete(sessionId);
+  });
+};
