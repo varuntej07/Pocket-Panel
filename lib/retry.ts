@@ -72,6 +72,22 @@ const NON_RETRYABLE_ERROR_NAMES = new Set(["AccessDeniedException", "ValidationE
 
 const extractStatusCode = (error: unknown): number | undefined => {
   if (!(error instanceof Error)) {
+    if (error && typeof error === "object") {
+      const asObject = error as Record<string, unknown>;
+      const directStatusCode =
+        typeof asObject.statusCode === "number"
+          ? asObject.statusCode
+          : typeof asObject.httpStatusCode === "number"
+            ? asObject.httpStatusCode
+            : undefined;
+      if (typeof directStatusCode === "number") {
+        return directStatusCode;
+      }
+      const metadata = asObject.$metadata;
+      if (metadata && typeof metadata === "object" && typeof (metadata as Record<string, unknown>).httpStatusCode === "number") {
+        return (metadata as Record<string, number>).httpStatusCode;
+      }
+    }
     return undefined;
   }
   const typedError = error as ErrorWithMetadata & { statusCode?: unknown };
@@ -87,6 +103,31 @@ export const isRetryableBedrockError = (error: unknown): boolean => {
   }
 
   if (!(error instanceof Error)) {
+    if (error && typeof error === "object") {
+      const asObject = error as Record<string, unknown>;
+      const objectName = typeof asObject.name === "string" ? asObject.name : undefined;
+      const objectMessage = typeof asObject.message === "string" ? asObject.message.toLowerCase() : "";
+
+      if (objectName && NON_RETRYABLE_ERROR_NAMES.has(objectName)) {
+        return false;
+      }
+      if (objectName && RETRYABLE_ERROR_NAMES.has(objectName)) {
+        return true;
+      }
+
+      const objectStatusCode = extractStatusCode(error);
+      if (objectStatusCode === 429 || (typeof objectStatusCode === "number" && objectStatusCode >= 500)) {
+        return true;
+      }
+
+      return (
+        objectMessage.includes("throttl") ||
+        objectMessage.includes("rate exceeded") ||
+        objectMessage.includes("too many requests") ||
+        objectMessage.includes("timed out") ||
+        objectMessage.includes("temporarily unavailable")
+      );
+    }
     return false;
   }
 

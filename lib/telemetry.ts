@@ -42,6 +42,14 @@ const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
 const toDefinedEntries = (record: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
 
+const safeJsonStringify = (value: unknown): string => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
 export const toErrorMetadata = (error: unknown): Record<string, unknown> => {
   if (error instanceof Error) {
     const typedError = error as ErrorWithMetadata;
@@ -80,6 +88,27 @@ export const toErrorMetadata = (error: unknown): Record<string, unknown> => {
       ...causeMetadata
     });
   }
+
+  if (isObjectRecord(error)) {
+    const messageFromObject = typeof error.message === "string" ? error.message : undefined;
+    const nameFromObject = typeof error.name === "string" ? error.name : undefined;
+    const statusCodeFromObject =
+      typeof error.statusCode === "number"
+        ? error.statusCode
+        : typeof error.httpStatusCode === "number"
+          ? error.httpStatusCode
+          : undefined;
+    const requestIdFromObject = typeof error.requestId === "string" ? error.requestId : undefined;
+
+    return toDefinedEntries({
+      errorName: nameFromObject,
+      errorMessage: messageFromObject ?? safeJsonStringify(error),
+      httpStatusCode: statusCodeFromObject,
+      requestId: requestIdFromObject,
+      errorKeys: Object.keys(error)
+    });
+  }
+
   return {
     errorMessage: String(error)
   };
