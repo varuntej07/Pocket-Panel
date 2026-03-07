@@ -16,7 +16,7 @@ export interface IntentClassification {
 }
 
 export interface SessionTurn {
-  speaker: Speaker;
+  speaker: Speaker | "moderator";
   text: string;
   turnIndex: number;
   createdAt: number;
@@ -34,6 +34,7 @@ export interface SessionState {
   started: boolean;
   endedReason?: string;
   lastError?: string;
+  pendingInjection?: string;
   socket?: {
     readyState: number;
     send: (payload: string) => void;

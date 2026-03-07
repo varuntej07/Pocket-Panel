@@ -994,6 +994,9 @@ const buildSonicRequestEvents = (text: string, voiceId: string, sampleRateHertz:
       delayAfterMs: frame.durationMs
     })),
     // 6. Cross-modal text input (sent while audio stream is active)
+    // role: "SYSTEM_SPEECH" tells Nova Sonic to vocalize this text directly
+    // rather than generating its own conversational response, which ensures
+    // the audio matches the transcript and that per-agent voiceId is honored.
     {
       requestEvent: {
         event: {
@@ -1004,8 +1007,8 @@ const buildSonicRequestEvents = (text: string, voiceId: string, sampleRateHertz:
             textInputConfiguration: {
               mediaType: "text/plain"
             },
-            interactive: true,
-            role: "USER"
+            interactive: false,
+            role: "SYSTEM_SPEECH"
           }
         }
       }

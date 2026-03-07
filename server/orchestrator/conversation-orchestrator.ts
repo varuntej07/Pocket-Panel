@@ -1,17 +1,20 @@
 import { chunkBuffer, splitTextForSpeech } from "../../lib/audio";
 import { synthesizeSpeechAudio } from "../../lib/bedrock/audio";
 import { generateDialogTurn } from "../../lib/bedrock/dialog";
+import { generatePositions } from "../../lib/bedrock/positions";
+import { generateSynthesis } from "../../lib/bedrock/synthesis";
 import { appConfig } from "../../lib/config";
 import { buildSceneSetup } from "../../lib/prompts";
 import {
   appendSessionTurn,
+  consumePendingInjection,
   getSession,
   markSessionEnded,
   markSessionError,
   markSessionStarted
 } from "../../lib/session-store";
 import { logError, logInfo, toErrorMetadata } from "../../lib/telemetry";
-import type { Speaker } from "../../lib/types";
+import type { SessionTurn, Speaker } from "../../lib/types";
 import type { ServerWsEvent } from "../ws/protocol";
 
 declare global {
@@ -37,6 +40,13 @@ const sendEvent = (sessionId: string, event: ServerWsEvent): void => {
     throw new Error(`No active WebSocket for session ${sessionId}`);
   }
   socket.send(JSON.stringify(event));
+};
+
+const trySendEvent = (sessionId: string, event: ServerWsEvent): void => {
+  const socket = getLiveSocket(sessionId);
+  if (socket) {
+    socket.send(JSON.stringify(event));
+  }
 };
 
 const isSessionClosed = (sessionId: string): boolean => getLiveSocket(sessionId) === null;
@@ -120,6 +130,42 @@ const streamSegmentAudio = async (params: {
   }
 };
 
+const streamSynthesis = async (sessionId: string): Promise<void> => {
+  const session = getSession(sessionId);
+  if (!session) {
+    return;
+  }
+
+  logInfo("orchestrator", "Starting post-debate synthesis", { sessionId });
+
+  const agentTurns = session.turns.filter((t) => t.speaker === "A" || t.speaker === "B");
+  if (agentTurns.length === 0) {
+    return;
+  }
+
+  try {
+    let hasChunks = false;
+    for await (const chunk of generateSynthesis(session.prompt, session.mode, session.turns)) {
+      hasChunks = true;
+      trySendEvent(sessionId, {
+        type: "SYNTHESIS_CHUNK",
+        text: chunk,
+        isFinal: false
+      });
+    }
+    if (hasChunks) {
+      trySendEvent(sessionId, {
+        type: "SYNTHESIS_CHUNK",
+        text: "",
+        isFinal: true
+      });
+    }
+    logInfo("orchestrator", "Synthesis streamed to client", { sessionId });
+  } catch (error) {
+    logError("orchestrator", "Synthesis streaming failed", { sessionId, ...toErrorMetadata(error) });
+  }
+};
+
 const runSessionConversation = async (sessionId: string): Promise<void> => {
   const session = getSession(sessionId);
   if (!session) {
@@ -140,6 +186,14 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
   });
 
   try {
+    // Pre-generate agent positions for consistent, opposed stances
+    const positions = await generatePositions(session.prompt, session.mode);
+    logInfo("orchestrator", "Agent positions assigned", {
+      sessionId,
+      positionA: positions.positionA,
+      positionB: positions.positionB
+    });
+
     const deadlineMs = Date.now() + appConfig.conversation.maxDurationSeconds * 1000;
 
     for (let turnIndex = 1; turnIndex <= appConfig.conversation.totalTurns; turnIndex += 1) {
@@ -163,16 +217,46 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
         return;
       }
 
+      // Check for moderator injection and prepend to history if present
+      const injectedText = consumePendingInjection(sessionId);
+      const historyWithInjection: SessionTurn[] = injectedText
+        ? [
+            ...activeSession.turns,
+            {
+              speaker: "moderator" as const,
+              text: injectedText,
+              turnIndex: 0,
+              createdAt: Date.now()
+            }
+          ]
+        : activeSession.turns;
+
+      if (injectedText) {
+        logInfo("orchestrator", "Moderator injection applied", { sessionId, injectedText });
+      }
+
+      const agentPosition = speaker === "A" ? positions.positionA : positions.positionB;
+
       const turnText = await generateDialogTurn({
         topic: activeSession.prompt,
         mode: activeSession.mode,
         speaker,
         turnIndex,
         totalTurns: appConfig.conversation.totalTurns,
-        history: activeSession.turns
+        history: historyWithInjection,
+        agentPosition
       });
 
       appendSessionTurn(sessionId, speaker, turnIndex, turnText);
+
+      // Emit transcript text before audio so UI can show it immediately
+      sendEvent(sessionId, {
+        type: "TURN_TEXT",
+        speaker,
+        turnIndex,
+        text: turnText
+      });
+
       logInfo("orchestrator", "Generated dialog turn", {
         sessionId,
         speaker,
@@ -237,6 +321,9 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
     }
     markSessionEnded(sessionId, "completed");
     logInfo("orchestrator", "Session completed", { sessionId });
+
+    // Stream post-debate synthesis after SESSION_END
+    await streamSynthesis(sessionId);
   } catch (error) {
     const baseMessage = error instanceof Error ? error.message : String(error);
     const causeMessage = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;

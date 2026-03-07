@@ -13,6 +13,12 @@ export type ServerWsEvent =
       turnIndex: number;
     }
   | {
+      type: "TURN_TEXT";
+      speaker: Speaker;
+      turnIndex: number;
+      text: string;
+    }
+  | {
       type: "AUDIO_CHUNK";
       speaker: Speaker;
       turnIndex: number;
@@ -28,6 +34,16 @@ export type ServerWsEvent =
       reason: "completed" | "error" | "closed";
     }
   | {
+      type: "SYNTHESIS_CHUNK";
+      text: string;
+      isFinal: boolean;
+    }
+  | {
       type: "ERROR";
       message: string;
     };
+
+export type ClientWsEvent = {
+  type: "USER_INJECT";
+  text: string;
+};

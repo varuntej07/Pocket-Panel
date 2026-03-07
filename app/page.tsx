@@ -10,6 +10,12 @@ import type { ModeSuggestion, Speaker } from "../lib/types";
 
 type UiPhase = "idle" | "classifying" | "ready" | "starting" | "connecting" | "live" | "ended" | "error";
 
+interface TranscriptTurn {
+  speaker: Speaker | "moderator";
+  turnIndex: number;
+  text: string;
+}
+
 interface ClassifyResponse {
   intent: string;
   modes: ModeSuggestion[];
@@ -35,6 +41,12 @@ type WsMessage =
       turnIndex: number;
     }
   | {
+      type: "TURN_TEXT";
+      speaker: Speaker;
+      turnIndex: number;
+      text: string;
+    }
+  | {
       type: "AUDIO_CHUNK";
       speaker: Speaker;
       turnIndex: number;
@@ -48,6 +60,11 @@ type WsMessage =
   | {
       type: "SESSION_END";
       reason: "completed" | "error" | "closed";
+    }
+  | {
+      type: "SYNTHESIS_CHUNK";
+      text: string;
+      isFinal: boolean;
     }
   | {
       type: "ERROR";
@@ -110,6 +127,9 @@ export default function HomePage() {
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isPaused, setIsPaused] = useState(false);
   const [volume, setVolume] = useState(1);
+  const [transcriptTurns, setTranscriptTurns] = useState<TranscriptTurn[]>([]);
+  const [synthesisText, setSynthesisText] = useState("");
+  const [synthesisComplete, setSynthesisComplete] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -154,6 +174,9 @@ export default function HomePage() {
     sessionEndedRef.current = false;
     setIsPaused(false);
     setNowSpeaking(null);
+    setTranscriptTurns([]);
+    setSynthesisText("");
+    setSynthesisComplete(false);
   }, []);
 
   const disconnectWs = useCallback(() => {
@@ -265,6 +288,20 @@ export default function HomePage() {
     [pumpQueue]
   );
 
+  const sendInjection = useCallback((text: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      clientLogWarn("Cannot inject: WebSocket not open");
+      return;
+    }
+    wsRef.current.send(JSON.stringify({ type: "USER_INJECT", text }));
+    // Immediately show the moderator turn in the transcript
+    setTranscriptTurns((prev) => [
+      ...prev,
+      { speaker: "moderator" as const, turnIndex: 0, text }
+    ]);
+    clientLogInfo("User injection sent", { textLength: text.length });
+  }, []);
+
   const handleWsMessage = useCallback(
     (event: MessageEvent<string>) => {
       clientLogInfo("Websocket message received", {
@@ -308,6 +345,19 @@ export default function HomePage() {
         return;
       }
 
+      if (payload.type === "TURN_TEXT") {
+        clientLogInfo("Turn text received", {
+          speaker: payload.speaker,
+          turnIndex: payload.turnIndex,
+          textLength: payload.text.length
+        });
+        setTranscriptTurns((prev) => [
+          ...prev,
+          { speaker: payload.speaker, turnIndex: payload.turnIndex, text: payload.text }
+        ]);
+        return;
+      }
+
       if (payload.type === "AUDIO_CHUNK") {
         const segmentKey = `${payload.turnIndex}:${payload.segmentIndex}:${payload.speaker}`;
         const existing = segmentBufferRef.current.get(segmentKey) ?? [];
@@ -347,6 +397,16 @@ export default function HomePage() {
         });
         sessionEndedRef.current = true;
         finalizeIfEnded();
+        return;
+      }
+
+      if (payload.type === "SYNTHESIS_CHUNK") {
+        if (payload.isFinal) {
+          setSynthesisComplete(true);
+          clientLogInfo("Synthesis complete");
+        } else {
+          setSynthesisText((prev) => prev + payload.text);
+        }
         return;
       }
 
@@ -533,14 +593,23 @@ export default function HomePage() {
       </div>
 
       <div className="column">
-        <AgentStage nowSpeaking={nowSpeaking} topicBreadcrumb={topicBreadcrumb} modeTitle={selectedMode?.title} />
+        <AgentStage
+          nowSpeaking={nowSpeaking}
+          topicBreadcrumb={topicBreadcrumb}
+          modeTitle={selectedMode?.title}
+          transcriptTurns={transcriptTurns}
+          synthesisText={synthesisText}
+          synthesisComplete={synthesisComplete}
+        />
         <PlayerControls
           canControl={Boolean(sessionId)}
           isPaused={isPaused}
           volume={volume}
+          isLive={phase === "live"}
           onTogglePause={togglePause}
           onVolumeChange={setVolume}
           onRestart={handleRestart}
+          onInject={sendInjection}
         />
         <audio ref={audioRef} hidden />
       </div>

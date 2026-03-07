@@ -1,5 +1,36 @@
 import type { ModeSuggestion, SessionTurn, Speaker } from "./types";
 
+export const buildSynthesisPrompt = (
+  topic: string,
+  mode: ModeSuggestion,
+  turns: SessionTurn[]
+): { systemPrompt: string; userPrompt: string } => {
+  const transcript = turns
+    .map((turn) =>
+      turn.speaker === "moderator" ? `[MODERATOR]: ${turn.text}` : `Agent ${turn.speaker}: ${turn.text}`
+    )
+    .join("\n\n");
+
+  const systemPrompt = [
+    "You are an expert debate analyst. After reviewing a debate transcript, produce a structured post-debate synthesis.",
+    "Be objective, precise, and insightful. Use plain text only — no markdown headers or bullet points.",
+    "Structure your response with these clearly labeled sections:",
+    "AGENT A POSITION: | AGENT B POSITION: | STRONGEST ARGUMENT (A): | STRONGEST ARGUMENT (B): | LOGICAL VERDICT: | FOLLOW-UP QUESTIONS:"
+  ].join(" ");
+
+  const userPrompt = [
+    `Topic: "${topic}"`,
+    `Format: ${mode.title} (${mode.category})`,
+    "",
+    "Transcript:",
+    transcript,
+    "",
+    "Provide a structured post-debate synthesis: each side's core position, their strongest argument, which side made the stronger logical case and why, and 2 concrete follow-up questions worth exploring."
+  ].join("\n");
+
+  return { systemPrompt, userPrompt };
+};
+
 const moderatorSpec = [
   "You are a strict moderator controlling a two-agent voice conversation.",
   "Enforce turn-taking with zero overlap and no interruptions.",
@@ -42,21 +73,28 @@ export const buildSceneSetup = (prompt: string, mode: ModeSuggestion): string =>
 export const buildDialogSystemPrompt = (
   mode: ModeSuggestion,
   maxSecondsPerTurn: number,
-  targetSpeaker: Speaker
+  targetSpeaker: Speaker,
+  assignedPosition?: string
 ): string => {
   const approximateWords = Math.max(35, Math.round(maxSecondsPerTurn * 2.4));
   const speakerInstruction =
     targetSpeaker === "A"
       ? "You are Agent A. You lead with clear framing and sharp structure."
       : "You are Agent B. You respond directly and pressure-test assumptions.";
+  const positionInstruction = assignedPosition
+    ? `Your assigned position: ${assignedPosition} Hold it firmly throughout.`
+    : "";
 
   return [
     moderatorSpec,
     speakerInstruction,
+    positionInstruction,
     formatRulesByCategory[mode.category],
     `Mode guidance: ${mode.formatGuidance}`,
     `Target length: around ${approximateWords} words so it sounds like about ${maxSecondsPerTurn} seconds.`
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 };
 
 export const buildDialogUserPrompt = (params: {
@@ -70,7 +108,7 @@ export const buildDialogUserPrompt = (params: {
   const { topic, mode, speaker, turnIndex, totalTurns, history } = params;
   const shortHistory = history
     .slice(-6)
-    .map((turn) => `${turn.speaker}: ${turn.text}`)
+    .map((turn) => (turn.speaker === "moderator" ? `[MODERATOR]: ${turn.text}` : `${turn.speaker}: ${turn.text}`))
     .join("\n");
 
   return [

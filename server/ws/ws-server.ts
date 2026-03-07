@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Socket } from "node:net";
 import { URL } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { clearSessionSocket, getSession, markSessionEnded, setSessionSocket } from "../../lib/session-store";
+import { clearSessionSocket, getSession, markSessionEnded, setPendingInjection, setSessionSocket } from "../../lib/session-store";
 import { logError, logInfo } from "../../lib/telemetry";
 import { startConversationIfNeeded } from "../orchestrator/conversation-orchestrator";
 import type { ServerWsEvent } from "./protocol";
@@ -75,12 +75,21 @@ export const attachWebSocketServer = (server: HttpServer): void => {
     });
 
     ws.on("message", (data) => {
-      const payloadLength =
-        Array.isArray(data) ? data.reduce((sum, chunk) => sum + chunk.byteLength, 0) : data.byteLength;
+      const raw = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as Buffer);
       logInfo("ws", "Received message from websocket client", {
         sessionId,
-        payloadLength
+        payloadLength: raw.length
       });
+
+      try {
+        const parsed = JSON.parse(raw.toString("utf-8")) as { type?: string; text?: string };
+        if (parsed.type === "USER_INJECT" && typeof parsed.text === "string" && parsed.text.trim().length > 0) {
+          setPendingInjection(sessionId, parsed.text.trim());
+          logInfo("ws", "User injection queued", { sessionId, textLength: parsed.text.length });
+        }
+      } catch {
+        // Non-JSON message — ignore
+      }
     });
 
     ws.on("error", (error: Error) => {

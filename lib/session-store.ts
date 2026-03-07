@@ -119,4 +119,24 @@ export const appendSessionTurn = (
   return turn;
 };
 
+export const setPendingInjection = (sessionId: string, text: string): void => {
+  const session = globalStore.sessions.get(sessionId);
+  if (!session) {
+    return;
+  }
+  session.pendingInjection = text;
+  touch(session);
+};
+
+export const consumePendingInjection = (sessionId: string): string | undefined => {
+  const session = globalStore.sessions.get(sessionId);
+  if (!session?.pendingInjection) {
+    return undefined;
+  }
+  const text = session.pendingInjection;
+  session.pendingInjection = undefined;
+  touch(session);
+  return text;
+};
+
 export const listSessions = (): SessionState[] => Array.from(globalStore.sessions.values());

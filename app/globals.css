@@ -351,6 +351,140 @@ body {
   }
 }
 
+/* Transcript panel */
+.transcriptPanel {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+
+.transcriptHeading {
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.transcriptScroll {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding-right: 0.25rem;
+}
+
+.transcriptTurn {
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(9, 18, 30, 0.6);
+  border-left: 3px solid var(--border);
+}
+
+.transcriptTurn--a {
+  border-left-color: var(--accent);
+}
+
+.transcriptTurn--b {
+  border-left-color: var(--accent-2);
+}
+
+.transcriptTurn--moderator {
+  border-left-color: #9b8fff;
+  background: rgba(20, 15, 40, 0.6);
+}
+
+.transcriptSpeaker {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.transcriptTurn--a .transcriptSpeaker {
+  color: var(--accent);
+}
+
+.transcriptTurn--b .transcriptSpeaker {
+  color: var(--accent-2);
+}
+
+.transcriptTurn--moderator .transcriptSpeaker {
+  color: #9b8fff;
+}
+
+.transcriptText {
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--text);
+  font-family: var(--font-prose), serif;
+}
+
+/* Synthesis panel */
+.synthesisPanel {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+
+.synthesisHeading {
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  color: var(--accent-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.synthesisText {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  font-family: var(--font-prose), serif;
+  background: rgba(9, 18, 30, 0.6);
+  border-radius: 10px;
+  padding: 0.7rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Injection row */
+.injectionRow {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  align-items: center;
+}
+
+.injectionInput {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: rgba(4, 9, 16, 0.72);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.9rem;
+  font-family: var(--font-prose), serif;
+}
+
+.injectionInput::placeholder {
+  color: var(--muted);
+}
+
+.injectionSend {
+  padding: 0.55rem 0.9rem;
+  white-space: nowrap;
+}
+
+.injectionSend:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @media (min-width: 980px) {
   .appShell {
     grid-template-columns: minmax(430px, 0.95fr) minmax(360px, 1fr);

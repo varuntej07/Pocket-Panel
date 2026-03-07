@@ -14,6 +14,7 @@ interface GenerateDialogTurnParams {
   turnIndex: number;
   totalTurns: number;
   history: SessionTurn[];
+  agentPosition?: string;
 }
 
 const fallbackUtterance = (params: GenerateDialogTurnParams): string => {
@@ -50,7 +51,12 @@ export const generateDialogTurn = async (params: GenerateDialogTurnParams): Prom
       modelId,
       system: [
         {
-          text: buildDialogSystemPrompt(params.mode, appConfig.conversation.maxSecondsPerTurn, params.speaker)
+          text: buildDialogSystemPrompt(
+            params.mode,
+            appConfig.conversation.maxSecondsPerTurn,
+            params.speaker,
+            params.agentPosition
+          )
         }
       ],
       messages: [
