@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentStage } from "../components/AgentStage";
+import { LandingHero } from "../components/LandingHero";
 import { LoadingOverlay } from "../components/LoadingOverlay";
 import { PlayerControls } from "../components/PlayerControls";
 import { PromptForm } from "../components/PromptForm";
 import { SuggestionsPanel } from "../components/SuggestionsPanel";
+import { TopicLibrary } from "../components/TopicLibrary";
 import type { ModeSuggestion, Speaker } from "../lib/types";
 
 type UiPhase = "idle" | "classifying" | "ready" | "starting" | "connecting" | "live" | "ended" | "error";
@@ -147,6 +149,15 @@ export default function HomePage() {
     }
   }, [volume]);
 
+  const scrollToApp = useCallback(() => {
+    document.getElementById("app-section")?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  const handleTopicSelect = useCallback((topic: string) => {
+    setPrompt(topic);
+    scrollToApp();
+  }, [scrollToApp]);
+
   const resetPlayback = useCallback(() => {
     clientLogInfo("Resetting playback state", {
       queuedUrls: audioQueueRef.current.length,
@@ -260,13 +271,13 @@ export default function HomePage() {
 
   const loadingLabel = useMemo(() => {
     if (phase === "classifying") {
-      return "Classifying intent and proposing modes...";
+      return "Classifying intent and proposing modes…";
     }
     if (phase === "starting") {
-      return "Preparing your session...";
+      return "Preparing your session…";
     }
     if (phase === "connecting") {
-      return "Connecting to live audio stream...";
+      return "Connecting to live audio stream…";
     }
     return "";
   }, [phase]);
@@ -294,7 +305,6 @@ export default function HomePage() {
       return;
     }
     wsRef.current.send(JSON.stringify({ type: "USER_INJECT", text }));
-    // Immediately show the moderator turn in the transcript
     setTranscriptTurns((prev) => [
       ...prev,
       { speaker: "moderator" as const, turnIndex: 0, text }
@@ -581,38 +591,47 @@ export default function HomePage() {
     void startSession(selectedMode);
   }, [selectedMode, startSession]);
 
+  const showTopicLibrary = phase === "idle" || phase === "ready";
+
   return (
-    <main className="appShell">
-      <LoadingOverlay visible={phase === "classifying" || phase === "starting" || phase === "connecting"} phaseLabel={loadingLabel} />
+    <>
+      <LandingHero onStart={scrollToApp} onTopicSelect={handleTopicSelect} />
 
-      <div className="column">
-        <PromptForm prompt={prompt} disabled={phase === "classifying" || phase === "starting" || phase === "connecting"} onChange={setPrompt} onSubmit={() => void handleClassify()} />
-        <p className="intentText">Detected intent: {intent || "Not classified yet"}</p>
-        {errorMessage ? <p className="errorText">{errorMessage}</p> : null}
-        <SuggestionsPanel modes={modes} selectedModeId={selectedMode?.id} onSelect={(mode) => void startSession(mode)} />
-      </div>
+      <main id="app-section" className="appShell">
+        <LoadingOverlay visible={phase === "classifying" || phase === "starting" || phase === "connecting"} phaseLabel={loadingLabel} />
 
-      <div className="column">
-        <AgentStage
-          nowSpeaking={nowSpeaking}
-          topicBreadcrumb={topicBreadcrumb}
-          modeTitle={selectedMode?.title}
-          transcriptTurns={transcriptTurns}
-          synthesisText={synthesisText}
-          synthesisComplete={synthesisComplete}
-        />
-        <PlayerControls
-          canControl={Boolean(sessionId)}
-          isPaused={isPaused}
-          volume={volume}
-          isLive={phase === "live"}
-          onTogglePause={togglePause}
-          onVolumeChange={setVolume}
-          onRestart={handleRestart}
-          onInject={sendInjection}
-        />
-        <audio ref={audioRef} hidden />
-      </div>
-    </main>
+        <div className="column">
+          <PromptForm prompt={prompt} disabled={phase === "classifying" || phase === "starting" || phase === "connecting"} onChange={setPrompt} onSubmit={() => void handleClassify()} />
+          <p className="intentText">Detected intent: {intent || "Not classified yet"}</p>
+          {errorMessage ? <p className="errorText">{errorMessage}</p> : null}
+          {showTopicLibrary && <TopicLibrary onSelect={handleTopicSelect} />}
+          <SuggestionsPanel modes={modes} selectedModeId={selectedMode?.id} onSelect={(mode) => void startSession(mode)} />
+        </div>
+
+        <div className="column">
+          <AgentStage
+            nowSpeaking={nowSpeaking}
+            topicBreadcrumb={topicBreadcrumb}
+            modeTitle={selectedMode?.title}
+            transcriptTurns={transcriptTurns}
+            synthesisText={synthesisText}
+            synthesisComplete={synthesisComplete}
+            phase={phase}
+            audioRef={audioRef}
+          />
+          <PlayerControls
+            canControl={Boolean(sessionId)}
+            isPaused={isPaused}
+            volume={volume}
+            isLive={phase === "live"}
+            onTogglePause={togglePause}
+            onVolumeChange={setVolume}
+            onRestart={handleRestart}
+            onInject={sendInjection}
+          />
+          <audio ref={audioRef} hidden />
+        </div>
+      </main>
+    </>
   );
 }

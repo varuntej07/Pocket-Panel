@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.840.0",
+    "gsap": "^3.14.2",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

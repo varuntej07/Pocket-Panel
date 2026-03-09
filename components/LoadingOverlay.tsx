@@ -1,13 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const fallbackQuotes = [
+const PHASES = [
+  "Classifying intent…",
+  "Routing to best mode…",
+  "Preparing agents…",
+  "Connecting audio stream…",
+  "Warming up voices…",
+];
+
+const FACTS = [
   "Let the voices sharpen the idea.",
   "A great argument is a clarity engine.",
-  "Teach me in one sentence, then prove it.",
   "Tension first, insight second.",
-  "Every strong point deserves a stronger counterpoint."
+  "Every strong point deserves a stronger counterpoint.",
+  "Teach me in one sentence, then prove it.",
 ];
 
 interface LoadingOverlayProps {
@@ -16,29 +24,62 @@ interface LoadingOverlayProps {
 }
 
 export function LoadingOverlay({ visible, phaseLabel }: LoadingOverlayProps) {
-  const quotes = useMemo(() => fallbackQuotes, []);
-  const [index, setIndex] = useState(0);
+  const [cyclePhase, setCyclePhase] = useState(0);
+  const [factIndex, setFactIndex] = useState(0);
+  const [factVisible, setFactVisible] = useState(true);
+  const cardRef = useRef<HTMLDivElement | null>(null);
 
+  // Cycle phase text every 2s
   useEffect(() => {
-    if (!visible) {
-      return;
-    }
-    const interval = setInterval(() => {
-      setIndex((value: number) => (value + 1) % quotes.length);
-    }, 1700);
-    return () => clearInterval(interval);
-  }, [visible, quotes.length]);
+    if (!visible) return;
+    const iv = setInterval(() => setCyclePhase((p) => (p + 1) % PHASES.length), 2000);
+    return () => clearInterval(iv);
+  }, [visible]);
 
-  if (!visible) {
-    return null;
-  }
+  // Cycle facts every 3.4s with CSS fade
+  useEffect(() => {
+    if (!visible) return;
+    const iv = setInterval(() => {
+      setFactVisible(false);
+      setTimeout(() => {
+        setFactIndex((i) => (i + 1) % FACTS.length);
+        setFactVisible(true);
+      }, 350);
+    }, 3400);
+    return () => clearInterval(iv);
+  }, [visible]);
+
+  // GSAP scale-in on mount
+  useEffect(() => {
+    if (!visible || !cardRef.current) return;
+    import("gsap").then(({ gsap }) => {
+      gsap.fromTo(
+        cardRef.current,
+        { scale: 0.9, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.45, ease: "back.out(1.6)" }
+      );
+    });
+  }, [visible]);
+
+  if (!visible) return null;
 
   return (
     <div className="loadingOverlay" role="status" aria-live="polite">
-      <div className="loadingCard">
-        <div className="spinner" />
-        <p className="loadingLabel">{phaseLabel}</p>
-        <p className="loadingQuote">{quotes[index]}</p>
+      <div ref={cardRef} className="loadingCard">
+        {/* 12 pulsing waveform bars */}
+        <div className="loadingBars" aria-hidden="true">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="loadingBar" style={{ animationDelay: `${i * 0.08}s` }} />
+          ))}
+        </div>
+
+        <p className="loadingLabel">{phaseLabel || PHASES[cyclePhase]}</p>
+        <p
+          className="loadingQuote"
+          style={{ opacity: factVisible ? 1 : 0, transition: "opacity 0.35s ease" }}
+        >
+          {FACTS[factIndex]}
+        </p>
       </div>
     </div>
   );
