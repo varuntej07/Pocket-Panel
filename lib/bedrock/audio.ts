@@ -720,7 +720,7 @@ type SonicRequestEvent =
             channelCount: 1;
             voiceId: string;
           };
-          toolUseOutputConfiguration: {
+          toolUseOutputConfiguration?: {
             mediaType: "application/json";
           };
         };
@@ -994,9 +994,8 @@ const buildSonicRequestEvents = (text: string, voiceId: string, sampleRateHertz:
       delayAfterMs: frame.durationMs
     })),
     // 6. Cross-modal text input (sent while audio stream is active)
-    // role: "SYSTEM_SPEECH" tells Nova Sonic to vocalize this text directly
-    // rather than generating its own conversational response, which ensures
-    // the audio matches the transcript and that per-agent voiceId is honored.
+    // role: "USER" + interactive: true triggers Nova Sonic to generate audio response.
+    // System prompt instructs it to read the text verbatim.
     {
       requestEvent: {
         event: {
@@ -1007,8 +1006,8 @@ const buildSonicRequestEvents = (text: string, voiceId: string, sampleRateHertz:
             textInputConfiguration: {
               mediaType: "text/plain"
             },
-            interactive: false,
-            role: "SYSTEM_SPEECH"
+            interactive: true,
+            role: "USER"
           }
         }
       }
@@ -1121,12 +1120,16 @@ const buildSonicRequestBody = async function* (
     const scheduledEvent = events[index];
     const encoded = textEncoder.encode(JSON.stringify(scheduledEvent.requestEvent));
     const delayAfterMs = scheduledEvent.delayAfterMs ?? 0;
-    logInfo("audio", "Sending Nova Sonic bidirectional request event", {
-      index,
-      bytesLength: encoded.length,
-      delayAfterMs,
-      ...describeSonicRequestEvent(scheduledEvent.requestEvent)
-    });
+    const eventDesc = describeSonicRequestEvent(scheduledEvent.requestEvent);
+    // Skip logging individual silence frames to avoid flooding the console (~500 per attempt)
+    if (eventDesc.eventName !== "audioInput") {
+      logInfo("audio", "Sending Nova Sonic bidirectional request event", {
+        index,
+        bytesLength: encoded.length,
+        delayAfterMs,
+        ...eventDesc
+      });
+    }
 
     yield {
       chunk: {

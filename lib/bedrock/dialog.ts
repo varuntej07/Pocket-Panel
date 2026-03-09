@@ -73,8 +73,9 @@ const searchWebToolConfig = {
         }
       }
     }
-  ],
-  toolChoice: { auto: {} }
+  ]
+  // No toolChoice — Nova Pro does not support the toolChoice field in the Converse API.
+  // Omitting it lets the model autonomously decide whether to invoke search_web.
 };
 
 export const generateDialogTurn = async (

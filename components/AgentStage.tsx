@@ -29,8 +29,6 @@ export function AgentStage({
   topicBreadcrumb,
   modeTitle,
   transcriptTurns,
-  synthesisText,
-  synthesisComplete,
   phase,
   audioRef,
 }: AgentStageProps) {
@@ -47,7 +45,8 @@ export function AgentStage({
   const currentTurn = agentTurns.length;
   const progressPct = Math.min((currentTurn / TOTAL_TURNS) * 100, 100);
   const showProgress = phase === "live" || phase === "ended";
-  const isActive = phase === "live";
+  const isActive = phase === "live" && nowSpeaking !== null;
+  const isEnded = phase === "ended";
 
   return (
     <section className="stage panel">
@@ -99,8 +98,8 @@ export function AgentStage({
         </div>
       )}
 
-      {/* Transcript */}
-      {transcriptTurns.length > 0 && (
+      {/* Live Transcript (hidden once ended — full transcript shown below) */}
+      {transcriptTurns.length > 0 && !isEnded && (
         <div className="transcriptPanel">
           <div className="transcriptHeaderRow">
             <h3 className="transcriptHeading">Live Transcript</h3>
@@ -132,13 +131,23 @@ export function AgentStage({
         </div>
       )}
 
-      {/* Synthesis */}
-      {synthesisText.length > 0 && (
-        <div className="synthesisPanel">
-          <h3 className="synthesisHeading">
-            Post-Debate Synthesis{synthesisComplete ? "" : " \u2026"}
-          </h3>
-          <pre className="synthesisText">{synthesisText}</pre>
+      {/* Full Conversation Transcript — shown at the end */}
+      {isEnded && transcriptTurns.length > 0 && (
+        <div className="transcriptPanel">
+          <h3 className="transcriptHeading">Full Conversation Transcript</h3>
+          <div className="transcriptScroll">
+            {transcriptTurns
+              .filter((turn) => turn.speaker !== "moderator")
+              .map((turn) => (
+                <div
+                  key={`${turn.turnIndex}-${turn.speaker}`}
+                  className={`transcriptTurn transcriptTurn--${turn.speaker.toLowerCase()}`}
+                >
+                  <span className="transcriptSpeaker">Agent {turn.speaker}</span>
+                  <p className="transcriptText">{turn.text}</p>
+                </div>
+              ))}
+          </div>
         </div>
       )}
     </section>

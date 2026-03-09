@@ -539,7 +539,6 @@ export default function HomePage() {
       });
 
       setIntent(data.intent);
-      setModes(data.modes ?? []);
 
       if (!data.modes || data.modes.length === 0) {
         setPhase("idle");
@@ -549,7 +548,9 @@ export default function HomePage() {
         return;
       }
 
-      setPhase("ready");
+      // Auto-start with the recommended mode (or first mode) — skip mode selection panel
+      const autoMode = data.modes.find((m) => m.recommended) ?? data.modes[0];
+      void startSession(autoMode);
     } catch (error) {
       clientLogError("Classification request failed", {
         error: String(error)
@@ -557,7 +558,7 @@ export default function HomePage() {
       setPhase("error");
       setErrorMessage(String(error));
     }
-  }, [disconnectWs, prompt, resetPlayback]);
+  }, [disconnectWs, prompt, resetPlayback, startSession]);
 
   const togglePause = useCallback(() => {
     const audio = audioRef.current;

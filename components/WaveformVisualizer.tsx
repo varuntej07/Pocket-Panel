@@ -59,8 +59,6 @@ export function WaveformVisualizer({ audioRef, isActive, nowSpeaking }: Waveform
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    let t = 0;
-
     const color = nowSpeaking === "B" ? COLOR_B : COLOR_A;
 
     const draw = () => {
@@ -86,16 +84,12 @@ export function WaveformVisualizer({ audioRef, isActive, nowSpeaking }: Waveform
         }
         ctx.globalAlpha = 1;
       } else {
-        // Idle sine wave
-        t += 0.04;
+        // Flat idle line — no animation until agent is speaking
         for (let i = 0; i < BAR_COUNT; i++) {
-          const phase = (i / BAR_COUNT) * Math.PI * 3 + t;
-          const val = (Math.sin(phase) * 0.5 + 0.5) * 0.25 + 0.04;
-          const barH = Math.max(2, val * H);
           const x = i * (barW + 1);
-          ctx.globalAlpha = 0.3 + val * 0.5;
+          ctx.globalAlpha = 0.15;
           ctx.fillStyle = color;
-          ctx.fillRect(x, H - barH, barW, barH);
+          ctx.fillRect(x, H - 2, barW, 2);
         }
         ctx.globalAlpha = 1;
       }
