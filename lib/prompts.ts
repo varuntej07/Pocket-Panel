@@ -91,7 +91,8 @@ export const buildDialogSystemPrompt = (
     positionInstruction,
     formatRulesByCategory[mode.category],
     `Mode guidance: ${mode.formatGuidance}`,
-    `Target length: around ${approximateWords} words so it sounds like about ${maxSecondsPerTurn} seconds.`
+    `Target length: around ${approximateWords} words so it sounds like about ${maxSecondsPerTurn} seconds.`,
+    "You have a search_web tool. Use it when citing current facts, statistics, or recent events strengthens your argument."
   ]
     .filter(Boolean)
     .join(" ");

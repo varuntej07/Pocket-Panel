@@ -237,15 +237,24 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
 
       const agentPosition = speaker === "A" ? positions.positionA : positions.positionB;
 
-      const turnText = await generateDialogTurn({
-        topic: activeSession.prompt,
-        mode: activeSession.mode,
-        speaker,
-        turnIndex,
-        totalTurns: appConfig.conversation.totalTurns,
-        history: historyWithInjection,
-        agentPosition
-      });
+      const turnText = await generateDialogTurn(
+        {
+          topic: activeSession.prompt,
+          mode: activeSession.mode,
+          speaker,
+          turnIndex,
+          totalTurns: appConfig.conversation.totalTurns,
+          history: historyWithInjection,
+          agentPosition
+        },
+        (event) => {
+          if (event.phase === "use") {
+            trySendEvent(sessionId, { type: "TOOL_USE", speaker, turnIndex, query: event.query });
+          } else {
+            trySendEvent(sessionId, { type: "TOOL_RESULT", speaker, turnIndex, sources: event.sources });
+          }
+        }
+      );
 
       appendSessionTurn(sessionId, speaker, turnIndex, turnText);
 

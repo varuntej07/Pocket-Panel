@@ -38,6 +38,13 @@ export type ServerWsEvent =
       text: string;
       isFinal: boolean;
     }
+  | { type: "TOOL_USE"; speaker: Speaker; turnIndex: number; query: string }
+  | {
+      type: "TOOL_RESULT";
+      speaker: Speaker;
+      turnIndex: number;
+      sources: Array<{ title: string; url: string; snippet: string }>;
+    }
   | {
       type: "ERROR";
       message: string;

@@ -493,16 +493,16 @@ export function LandingHero({ onStart, onTopicSelect }: LandingHeroProps) {
       {/* ── HERO ─────────────────────────────────────────────── */}
       <section className="lh-hero">
         <h1 ref={titleRef} className="lh-title">
-          <span className="lh-title-word">Your</span>{" "}
-          <span className="lh-title-word">Ideas.</span>{" "}
+          <span className="lh-title-word">AI Panel</span>{" "}
+          <span className="lh-title-word">Discussions.</span>{" "}
           <br className="lh-title-br" />
-          <span className="lh-title-gradient lh-title-word">Two</span>{" "}
-          <span className="lh-title-gradient lh-title-word">Voices.</span>
+          <span className="lh-title-gradient lh-title-word">Instantly</span>{" "}
+          <span className="lh-title-gradient lh-title-word">On Any Topic.</span>
         </h1>
 
         <p className="lh-sub">
-          Enter any topic. PocketPanel deploys two AI agents that argue,
-          teach, or podcast it — live, with voice.
+          Drop any topic and get a live, voice-first AI panel — debating, teaching, podcasting, or arguing — 
+          with agents that fact-check claims in real time using web search tools.
         </p>
 
         {/* Voice-wave underglow */}
