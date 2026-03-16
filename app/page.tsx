@@ -136,7 +136,7 @@ export default function HomePage() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<Array<{ url: string; speaker: Speaker }>>([]);
+  const audioQueueRef = useRef<Array<string>>([]);
   const activeUrlRef = useRef<string | null>(null);
   const isPlayingRef = useRef(false);
   const volumeRef = useRef(1);
@@ -185,7 +185,7 @@ export default function HomePage() {
     }
 
     for (const item of audioQueueRef.current) {
-      URL.revokeObjectURL(item.url);
+      URL.revokeObjectURL(item);
     }
     audioQueueRef.current = [];
     segmentBufferRef.current.clear();
