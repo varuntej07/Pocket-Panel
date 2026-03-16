@@ -6,32 +6,22 @@ interface TopicLibraryProps {
   onSelect: (topic: string) => void;
 }
 
-const CATEGORIES: { label: string; color: string; topics: string[] }[] = [
-  {
-    label: "Debate",
-    color: "#4ade80",
-    topics: ["AI should replace teachers", "Democracy vs meritocracy", "Capital punishment effectiveness"],
-  },
-  {
-    label: "Argument",
-    color: "#f87171",
-    topics: ["Remote work kills creativity", "Social media causes depression", "Crypto is a scam"],
-  },
-  {
-    label: "Teaching",
-    color: "#60a5fa",
-    topics: ["How does quantum computing work?", "Explain blockchain simply", "What is universal basic income?"],
-  },
-  {
-    label: "Podcast",
-    color: "#fbbf24",
-    topics: ["The future of electric vehicles", "Space tourism — opportunity or folly?", "Can gene editing cure disease?"],
-  },
-  {
-    label: "Philosophy",
-    color: "#c084fc",
-    topics: ["Free will vs determinism", "Is morality objective?", "The nature of consciousness"],
-  },
+const TOPICS = [
+  "Should AI systems be allowed to make binding legal decisions?",
+  "Universal basic income: safety net or economic trap?",
+  "Nuclear energy is the only realistic path to net zero",
+  "Is remote work permanently degrading collaboration and culture?",
+  "Should social media platforms be regulated as public utilities?",
+  "Consciousness: emergent property of matter or something irreducible?",
+  "Can gene editing eliminate inherited disease within a generation?",
+  "Cryptocurrency — legitimate currency or institutionalized speculation?",
+  "Space colonization: humanity's insurance policy or a billionaire fantasy?",
+  "Free will vs determinism — does neuroscience settle the debate?",
+  "Should billionaires exist in a functioning democracy?",
+  "Open-source AI: accelerating progress or accelerating risk?",
+  // Tool-calling topics — benefit from live data lookup
+  "What do the latest AI chip export restrictions mean for global tech power?",
+  "How are central banks currently responding to persistent inflation?",
 ];
 
 export function TopicLibrary({ onSelect }: TopicLibraryProps) {
@@ -39,9 +29,9 @@ export function TopicLibrary({ onSelect }: TopicLibraryProps) {
     import("gsap").then(({ gsap }) => {
       gsap.from(".topicPill", {
         opacity: 0,
-        y: 20,
-        stagger: 0.06,
-        duration: 0.45,
+        y: 16,
+        stagger: 0.04,
+        duration: 0.4,
         ease: "power2.out",
         clearProps: "all",
       });
@@ -50,26 +40,18 @@ export function TopicLibrary({ onSelect }: TopicLibraryProps) {
 
   return (
     <div className="topicLibrary">
-      <p className="topicLibraryHeading">Or pick a starter topic</p>
-      {CATEGORIES.map((cat) => (
-        <div key={cat.label} className="topicCategory">
-          <span className="topicCategoryLabel" style={{ color: cat.color }}>
-            {cat.label}
-          </span>
-          <div className="topicPills">
-            {cat.topics.map((topic) => (
-              <button
-                key={topic}
-                type="button"
-                className="topicPill"
-                onClick={() => onSelect(topic)}
-              >
-                {topic}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
+      <div className="topicPills">
+        {TOPICS.map((topic) => (
+          <button
+            key={topic}
+            type="button"
+            className="topicPill"
+            onClick={() => onSelect(topic)}
+          >
+            {topic}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

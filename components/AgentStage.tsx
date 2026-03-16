@@ -2,24 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AgentAvatar } from "./AgentAvatar";
-import { WaveformVisualizer } from "./WaveformVisualizer";
 import type { Speaker } from "../lib/types";
-
-const WAITING_CAPTIONS = [
-  "Synthesizing the debate…",
-  "Agents contemplating their next move…",
-  "Warming up the vocal cords…",
-  "Formulating counterarguments…",
-  "Cross-referencing the facts…",
-  "Agents deep in thought…",
-  "Preparing a compelling point…",
-  "Loading perspectives…",
-  "Calibrating opinions…",
-  "The stage is almost set…",
-  "Consulting the argument playbook…",
-  "Agent A sharpening their rhetoric…",
-  "Brewing the perfect rebuttal…",
-];
 
 interface TranscriptTurn {
   speaker: Speaker | "moderator";
@@ -35,7 +18,6 @@ interface AgentStageProps {
   synthesisText: string;
   synthesisComplete: boolean;
   phase: string;
-  audioRef: React.RefObject<HTMLAudioElement | null>;
   isAudioPlaying: boolean;
 }
 
@@ -47,7 +29,6 @@ export function AgentStage({
   modeTitle,
   transcriptTurns,
   phase,
-  audioRef,
   isAudioPlaying,
 }: AgentStageProps) {
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
@@ -91,14 +72,10 @@ export function AgentStage({
         <AgentAvatar agent="B" isActive={nowSpeaking === "B"} phase={phase} />
       </div>
 
-      {/* Waveform or waiting captions */}
-      <div className="waveformWrap">
-        {showCaptions ? (
-          <p className="waitingCaption">{WAITING_CAPTIONS[captionIndex]}</p>
-        ) : (
-          <WaveformVisualizer audioRef={audioRef} isActive={isAudioPlaying} nowSpeaking={nowSpeaking} />
-        )}
-      </div>
+      {/* Waiting captions — only shown between turns */}
+      {showCaptions && (
+        <p className="waitingCaption">{WAITING_CAPTIONS[captionIndex]}</p>
+      )}
 
       <p className="nowSpeaking">
         {isAudioPlaying && nowSpeaking ? `Agent ${nowSpeaking} speaking` : phase === "live" ? "Standby…" : "Waiting to start"}

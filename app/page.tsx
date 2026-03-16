@@ -128,7 +128,6 @@ export default function HomePage() {
   const [nowSpeaking, setNowSpeaking] = useState<Speaker | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isPaused, setIsPaused] = useState(false);
-  const [volume, setVolume] = useState(1);
   const [transcriptTurns, setTranscriptTurns] = useState<TranscriptTurn[]>([]);
   const [synthesisText, setSynthesisText] = useState("");
   const [synthesisComplete, setSynthesisComplete] = useState(false);
@@ -139,7 +138,6 @@ export default function HomePage() {
   const audioQueueRef = useRef<Array<string>>([]);
   const activeUrlRef = useRef<string | null>(null);
   const isPlayingRef = useRef(false);
-  const volumeRef = useRef(1);
   const sessionEndedRef = useRef(false);
   const segmentBufferRef = useRef<Map<string, Uint8Array[]>>(new Map());
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -149,13 +147,6 @@ export default function HomePage() {
   // Tracks which turns received server-streamed audio (Sonic agent mode).
   // When present, Browser TTS is skipped for that turn.
   const receivedAudioForTurnRef = useRef<Set<number>>(new Set());
-
-  useEffect(() => {
-    volumeRef.current = volume;
-    if (audioRef.current) {
-      audioRef.current.volume = volume;
-    }
-  }, [volume]);
 
   const scrollToApp = useCallback(() => {
     document.getElementById("app-section")?.scrollIntoView({ behavior: "smooth" });
@@ -234,12 +225,11 @@ export default function HomePage() {
     }
 
     audio.src = nextUrl;
-    audio.volume = volumeRef.current;
+    audio.volume = 1;
     activeUrlRef.current = nextUrl;
     isPlayingRef.current = true;
     clientLogInfo("Starting playback for queued audio blob", {
-      queueLengthAfterShift: audioQueueRef.current.length,
-      volume: volumeRef.current
+      queueLengthAfterShift: audioQueueRef.current.length
     });
 
     void audio.play().catch(() => {
@@ -456,7 +446,7 @@ export default function HomePage() {
             utterance.voice = voice;
             utterance.rate = 1.0;
             utterance.pitch = pitch;
-            utterance.volume = volumeRef.current;
+            utterance.volume = 1;
 
             utterance.onstart = () => {
               if (speechGenRef.current === gen) setIsAudioPlaying(true);
@@ -729,7 +719,7 @@ export default function HomePage() {
 
         <div className="column">
           <PromptForm prompt={prompt} disabled={phase === "classifying" || phase === "starting" || phase === "connecting"} onChange={setPrompt} onSubmit={() => void handleClassify()} />
-          <p className="intentText">Detected intent: {intent || "Not classified yet"}</p>
+          {intent && <p className="intentText">Detected intent: {intent}</p>}
           {errorMessage ? <p className="errorText">{errorMessage}</p> : null}
           {showTopicLibrary && <TopicLibrary onSelect={handleTopicSelect} />}
           <SuggestionsPanel modes={modes} selectedModeId={selectedMode?.id} onSelect={(mode) => void startSession(mode)} />
@@ -744,16 +734,13 @@ export default function HomePage() {
             synthesisText={synthesisText}
             synthesisComplete={synthesisComplete}
             phase={phase}
-            audioRef={audioRef}
             isAudioPlaying={isAudioPlaying}
           />
           <PlayerControls
             canControl={Boolean(sessionId)}
             isPaused={isPaused}
-            volume={volume}
             isLive={phase === "live"}
             onTogglePause={togglePause}
-            onVolumeChange={setVolume}
             onRestart={handleRestart}
             onInject={sendInjection}
           />

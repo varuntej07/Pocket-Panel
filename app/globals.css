@@ -205,6 +205,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 999px;
   padding: 0.15rem 0.45rem;
+  background: transparent;
 }
 
 .pill.recommended {
@@ -214,18 +215,22 @@ body {
 
 .pill.debate {
   color: #9ae6b4;
+  border-color: rgba(154, 230, 180, 0.45);
 }
 
 .pill.argument {
   color: #ff9f9f;
+  border-color: rgba(255, 159, 159, 0.45);
 }
 
 .pill.teaching {
   color: #95d5ff;
+  border-color: rgba(149, 213, 255, 0.45);
 }
 
 .pill.podcast {
   color: #ffd69e;
+  border-color: rgba(255, 214, 158, 0.45);
 }
 
 .stage {
@@ -287,17 +292,6 @@ body {
   display: flex;
   gap: 0.6rem;
   flex-wrap: wrap;
-}
-
-.volumeControl {
-  display: grid;
-  gap: 0.45rem;
-  margin-top: 0.9rem;
-  color: var(--muted);
-}
-
-.volumeControl input {
-  width: 100%;
 }
 
 .loadingOverlay {
@@ -385,6 +379,25 @@ body {
   flex-direction: column;
   gap: 0.55rem;
   padding-right: 0.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(46, 196, 182, 0.25) transparent;
+}
+
+.transcriptScroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.transcriptScroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.transcriptScroll::-webkit-scrollbar-thumb {
+  background: rgba(46, 196, 182, 0.25);
+  border-radius: 999px;
+}
+
+.transcriptScroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(46, 196, 182, 0.5);
 }
 
 .transcriptTurn {
@@ -1269,27 +1282,9 @@ body {
 /* ─────────────────────────────────────────────
    WAVEFORM VISUALIZER
 ───────────────────────────────────────────── */
-.waveformWrap {
-  margin: 0.8rem 0 0;
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(5, 10, 18, 0.6);
-  height: 56px;
-}
-
-.waveformCanvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
 .waitingCaption {
-  margin: 0;
-  padding: 0 1rem;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin: 0.8rem 0 0;
+  text-align: center;
   font-size: 0.82rem;
   color: var(--muted);
   font-style: italic;
@@ -1476,31 +1471,6 @@ body {
   border-radius: 14px;
   padding: 1rem;
   background: rgba(10, 19, 31, 0.5);
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-}
-
-.topicLibraryHeading {
-  margin: 0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-}
-
-.topicCategory {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.topicCategoryLabel {
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
 }
 
 .topicPills {
