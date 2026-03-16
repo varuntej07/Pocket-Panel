@@ -1,10 +1,7 @@
-.next
 node_modules
-dist
-
+.next
+.git
 .env
-.env.local
 .env.*
 *.log
-
 *.tsbuildinfo
