@@ -146,6 +146,9 @@ export default function HomePage() {
   // Monotonically increasing: each new TURN_TEXT increments this so stale
   // closures from previous turns cannot signal CLIENT_SPEECH_DONE.
   const speechGenRef = useRef(0);
+  // Tracks which turns received server-streamed audio (Sonic agent mode).
+  // When present, Browser TTS is skipped for that turn.
+  const receivedAudioForTurnRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     volumeRef.current = volume;
@@ -189,6 +192,7 @@ export default function HomePage() {
     isPlayingRef.current = false;
     sessionEndedRef.current = false;
     speechGenRef.current++; // invalidate any active speech generation
+    receivedAudioForTurnRef.current.clear();
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -393,6 +397,14 @@ export default function HomePage() {
           { speaker: payload.speaker, turnIndex: payload.turnIndex, text: payload.text }
         ]);
 
+        // Skip Browser TTS when server already streamed audio for this turn (Sonic agent mode)
+        if (receivedAudioForTurnRef.current.has(payload.turnIndex)) {
+          clientLogInfo("Skipping Browser TTS — server audio received for turn", {
+            turnIndex: payload.turnIndex
+          });
+          return;
+        }
+
         if (typeof window !== "undefined" && window.speechSynthesis) {
           // Cancel any residual speech from a previous stuck utterance.
           // Done here (not in SPEAKER_CHANGE) so we never cancel a live utterance
@@ -470,6 +482,19 @@ export default function HomePage() {
       }
 
       if (payload.type === "AUDIO_CHUNK") {
+        receivedAudioForTurnRef.current.add(payload.turnIndex);
+
+        // Empty chunkBase64 = final segment marker from Sonic agent mode; skip decode
+        if (payload.chunkBase64 === "") {
+          if (payload.isFinalSegment) {
+            clientLogInfo("Received empty final segment marker", {
+              speaker: payload.speaker,
+              turnIndex: payload.turnIndex
+            });
+          }
+          return;
+        }
+
         const segmentKey = `${payload.turnIndex}:${payload.segmentIndex}:${payload.speaker}`;
         const existing = segmentBufferRef.current.get(segmentKey) ?? [];
         existing.push(base64ToBytes(payload.chunkBase64));

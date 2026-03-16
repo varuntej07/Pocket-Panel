@@ -1,5 +1,79 @@
 import type { ModeSuggestion, SessionTurn, Speaker } from "./types";
 
+// ---------------------------------------------------------------------------
+// Nova Sonic Agent Mode prompts
+// ---------------------------------------------------------------------------
+
+export const buildSonicAgentSystemPrompt = (params: {
+  speaker: Speaker;
+  mode: ModeSuggestion;
+  assignedPosition: string;
+}): string => {
+  const { speaker, mode, assignedPosition } = params;
+
+  const speakerInstruction =
+    speaker === "A"
+      ? "You open the exchange. Make a sharp, confident claim and own it. No introduction — start with your point."
+      : "You respond to what was just said. Disagree directly, push back with conviction. React like you genuinely heard it and want to challenge it. No preamble.";
+
+  const positionInstruction = assignedPosition
+    ? `Your assigned position: ${assignedPosition}. Hold it firmly throughout.`
+    : "";
+
+  return [
+    moderatorSpec,
+    speakerInstruction,
+    positionInstruction,
+    formatRulesByCategory[mode.category],
+    `Mode guidance: ${mode.formatGuidance}`,
+    "Target length: 3 to 5 sentences. Always finish every sentence you start.",
+    "Use contractions, vary your pace, show conviction. React to what you hear.",
+    "Avoid 'First', 'Second', 'Finally', 'In conclusion', and other essay transitions. Speak like you're in a heated room, not writing an op-ed."
+  ]
+    .filter(Boolean)
+    .join(" ");
+};
+
+export const buildSonicAgentUserPrompt = (params: {
+  topic: string;
+  speaker: Speaker;
+  turnIndex: number;
+  totalTurns: number;
+  opponentText: string | null;
+  history: SessionTurn[];
+  injectedContext?: string;
+}): string => {
+  const { topic, speaker, turnIndex, totalTurns, opponentText, history, injectedContext } = params;
+
+  const shortHistory = history
+    .slice(-6)
+    .map((turn) => {
+      if (turn.speaker === "moderator") return `[moderator]: ${turn.text}`;
+      return turn.speaker === speaker ? `[you]: ${turn.text}` : `[them]: ${turn.text}`;
+    })
+    .join("\n");
+
+  const parts: string[] = [`Topic: ${topic}`, `Turn: ${turnIndex} of ${totalTurns}`];
+
+  if (shortHistory) {
+    parts.push(`Conversation so far:\n${shortHistory}`);
+  }
+
+  if (turnIndex === 1) {
+    parts.push("You go first. Make your opening argument.");
+  } else if (opponentText) {
+    parts.push(`[them]: ${opponentText}\n\nRespond to what they just said. Speak your turn now.`);
+  }
+
+  if (injectedContext) {
+    parts.push(`A moderator interjected: ${injectedContext}. Address this in your response.`);
+  }
+
+  parts.push("Speak your turn now. Do not introduce yourself or announce your side. Start directly with your argument.");
+
+  return parts.join("\n\n");
+};
+
 export const buildSynthesisPrompt = (
   topic: string,
   mode: ModeSuggestion,

@@ -1,10 +1,10 @@
 import { chunkBuffer, splitTextForSpeech } from "../../lib/audio";
-import { synthesizeSpeechAudio } from "../../lib/bedrock/audio";
+import { encodePcm16LeToWav, invokeSonicAsAgent, synthesizeSpeechAudio } from "../../lib/bedrock/audio";
 import { generateDialogTurn } from "../../lib/bedrock/dialog";
 import { generatePositions } from "../../lib/bedrock/positions";
 import { generateSynthesis } from "../../lib/bedrock/synthesis";
 import { appConfig } from "../../lib/config";
-import { buildSceneSetup } from "../../lib/prompts";
+import { buildSceneSetup, buildSonicAgentSystemPrompt, buildSonicAgentUserPrompt } from "../../lib/prompts";
 import {
   appendSessionTurn,
   awaitSpeechDone,
@@ -238,99 +238,212 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
 
       const agentPosition = speaker === "A" ? positions.positionA : positions.positionB;
 
-      const turnText = await generateDialogTurn(
-        {
-          topic: activeSession.prompt,
+      if (process.env.SONIC_AGENT_MODE === "true") {
+        // ── Nova Sonic Agent Mode ──
+        // Sonic generates its OWN text + audio response (no separate text LLM step).
+        const systemPrompt = buildSonicAgentSystemPrompt({
+          speaker,
           mode: activeSession.mode,
+          assignedPosition: agentPosition
+        });
+
+        const opponentText = turnIndex === 1
+          ? null
+          : activeSession.turns[activeSession.turns.length - 1]?.text ?? "";
+
+        const userPrompt = buildSonicAgentUserPrompt({
+          topic: activeSession.prompt,
           speaker,
           turnIndex,
           totalTurns: appConfig.conversation.totalTurns,
+          opponentText,
           history: historyWithInjection,
-          agentPosition
-        },
-        (event) => {
-          if (event.phase === "use") {
-            trySendEvent(sessionId, { type: "TOOL_USE", speaker, turnIndex, query: event.query });
-          } else {
-            trySendEvent(sessionId, { type: "TOOL_RESULT", speaker, turnIndex, sources: event.sources });
+          injectedContext: injectedText ?? undefined
+        });
+
+        const voiceId = speaker === "A" ? appConfig.voices.agentA : appConfig.voices.agentB;
+        let segmentIndex = 0;
+        let pcmBuffer: Uint8Array[] = [];
+        let bufferBytes = 0;
+        let sampleRate = 24000;
+        const FLUSH_THRESHOLD = 9600; // ~200ms at 24kHz mono 16-bit
+
+        const flushPcmBuffer = () => {
+          if (bufferBytes === 0) return;
+          const totalLength = pcmBuffer.reduce((sum, chunk) => sum + chunk.length, 0);
+          const merged = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const chunk of pcmBuffer) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
           }
-        }
-      );
-
-      appendSessionTurn(sessionId, speaker, turnIndex, turnText);
-
-      // Emit transcript text before audio so UI can show it immediately
-      sendEvent(sessionId, {
-        type: "TURN_TEXT",
-        speaker,
-        turnIndex,
-        text: turnText
-      });
-
-      logInfo("orchestrator", "Generated dialog turn", {
-        sessionId,
-        speaker,
-        turnIndex,
-        turnTextLength: turnText.length,
-        turnTextPreview: turnText.slice(0, 180)
-      });
-
-      if (process.env.BROWSER_TTS_ENABLED === "true") {
-        // Browser Web Speech API path: client speaks the text itself.
-        // Orchestrator waits for CLIENT_SPEECH_DONE signal (with a generous timeout)
-        // so turns remain properly sequenced without any server-side audio synthesis.
-        const wordCount = turnText.trim().split(/\s+/).length;
-        const estimatedMs = (wordCount / 2.5) * 1000 + 5000;
-        const timeoutMs = Math.max(15_000, Math.min(estimatedMs, 75_000));
-        logInfo("orchestrator", "Awaiting client speech done", { sessionId, speaker, turnIndex, wordCount, timeoutMs });
-        await awaitSpeechDone(sessionId, timeoutMs);
-        logInfo("orchestrator", "Client speech done, continuing", { sessionId, speaker, turnIndex });
-      } else {
-        const segments = splitTextForSpeech(turnText);
-        if (segments.length === 0) {
-          logInfo("orchestrator", "No speakable segments produced for turn", {
-            sessionId,
+          const wavChunk = encodePcm16LeToWav(merged, sampleRate);
+          sendEvent(sessionId, {
+            type: "AUDIO_CHUNK",
             speaker,
-            turnIndex
+            turnIndex,
+            segmentIndex: segmentIndex++,
+            chunkIndex: 0,
+            chunkBase64: Buffer.from(wavChunk).toString("base64"),
+            mimeType: "audio/wav",
+            isFinalChunk: true,
+            isFinalSegment: false
           });
-          continue;
-        }
+          pcmBuffer = [];
+          bufferBytes = 0;
+        };
 
-        if (turnIndex === 1 && speaker === "A") {
-          segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
-          logInfo("orchestrator", "Prepended scene setup segment for first turn", {
-            sessionId,
-            speaker,
-            turnIndex
-          });
-        }
+        let turnTextAccumulator = "";
 
-        logInfo("orchestrator", "Turn segmented for speech synthesis", {
+        logInfo("orchestrator", "Invoking Sonic agent mode", {
           sessionId,
           speaker,
           turnIndex,
-          segmentCount: segments.length,
-          segmentLengths: segments.map((segment) => segment.length)
+          voiceId,
+          systemPromptLength: systemPrompt.length,
+          userPromptLength: userPrompt.length
         });
 
-        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-          if (Date.now() >= deadlineMs) {
-            logInfo("orchestrator", "Reached conversation deadline while streaming segments", {
+        const result = await invokeSonicAsAgent(
+          { systemPrompt, userPrompt, voiceId },
+          {
+            onAudioChunk: (pcmBytes, sr) => {
+              sampleRate = sr;
+              pcmBuffer.push(pcmBytes);
+              bufferBytes += pcmBytes.length;
+              if (bufferBytes >= FLUSH_THRESHOLD) flushPcmBuffer();
+            },
+            onTextChunk: (text) => {
+              turnTextAccumulator += text;
+            }
+          }
+        );
+
+        // Flush remaining audio
+        flushPcmBuffer();
+        // Send final segment marker (empty chunk signals end)
+        sendEvent(sessionId, {
+          type: "AUDIO_CHUNK",
+          speaker,
+          turnIndex,
+          segmentIndex,
+          chunkIndex: 0,
+          chunkBase64: "",
+          mimeType: "audio/wav",
+          isFinalChunk: true,
+          isFinalSegment: true
+        });
+
+        const finalText = result.fullText || turnTextAccumulator || "Response generated.";
+        appendSessionTurn(sessionId, speaker, turnIndex, finalText);
+        sendEvent(sessionId, {
+          type: "TURN_TEXT",
+          speaker,
+          turnIndex,
+          text: finalText
+        });
+
+        logInfo("orchestrator", "Sonic agent turn completed", {
+          sessionId,
+          speaker,
+          turnIndex,
+          textLength: finalText.length,
+          totalAudioBytes: result.totalAudioBytes,
+          textPreview: finalText.slice(0, 180)
+        });
+      } else {
+        // ── Text LLM + TTS path (existing) ──
+        const turnText = await generateDialogTurn(
+          {
+            topic: activeSession.prompt,
+            mode: activeSession.mode,
+            speaker,
+            turnIndex,
+            totalTurns: appConfig.conversation.totalTurns,
+            history: historyWithInjection,
+            agentPosition
+          },
+          (event) => {
+            if (event.phase === "use") {
+              trySendEvent(sessionId, { type: "TOOL_USE", speaker, turnIndex, query: event.query });
+            } else {
+              trySendEvent(sessionId, { type: "TOOL_RESULT", speaker, turnIndex, sources: event.sources });
+            }
+          }
+        );
+
+        appendSessionTurn(sessionId, speaker, turnIndex, turnText);
+
+        // Emit transcript text before audio so UI can show it immediately
+        sendEvent(sessionId, {
+          type: "TURN_TEXT",
+          speaker,
+          turnIndex,
+          text: turnText
+        });
+
+        logInfo("orchestrator", "Generated dialog turn", {
+          sessionId,
+          speaker,
+          turnIndex,
+          turnTextLength: turnText.length,
+          turnTextPreview: turnText.slice(0, 180)
+        });
+
+        if (process.env.BROWSER_TTS_ENABLED === "true") {
+          const wordCount = turnText.trim().split(/\s+/).length;
+          const estimatedMs = (wordCount / 2.5) * 1000 + 5000;
+          const timeoutMs = Math.max(15_000, Math.min(estimatedMs, 75_000));
+          logInfo("orchestrator", "Awaiting client speech done", { sessionId, speaker, turnIndex, wordCount, timeoutMs });
+          await awaitSpeechDone(sessionId, timeoutMs);
+          logInfo("orchestrator", "Client speech done, continuing", { sessionId, speaker, turnIndex });
+        } else {
+          const segments = splitTextForSpeech(turnText);
+          if (segments.length === 0) {
+            logInfo("orchestrator", "No speakable segments produced for turn", {
               sessionId,
               speaker,
-              turnIndex,
-              segmentIndex
+              turnIndex
             });
-            break;
+            continue;
           }
-          await streamSegmentAudio({
+
+          if (turnIndex === 1 && speaker === "A") {
+            segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
+            logInfo("orchestrator", "Prepended scene setup segment for first turn", {
+              sessionId,
+              speaker,
+              turnIndex
+            });
+          }
+
+          logInfo("orchestrator", "Turn segmented for speech synthesis", {
             sessionId,
             speaker,
             turnIndex,
-            segmentIndex,
-            segmentText: segments[segmentIndex],
-            isFinalSegment: segmentIndex === segments.length - 1
+            segmentCount: segments.length,
+            segmentLengths: segments.map((segment) => segment.length)
           });
+
+          for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+            if (Date.now() >= deadlineMs) {
+              logInfo("orchestrator", "Reached conversation deadline while streaming segments", {
+                sessionId,
+                speaker,
+                turnIndex,
+                segmentIndex
+              });
+              break;
+            }
+            await streamSegmentAudio({
+              sessionId,
+              speaker,
+              turnIndex,
+              segmentIndex,
+              segmentText: segments[segmentIndex],
+              isFinalSegment: segmentIndex === segments.length - 1
+            });
+          }
         }
       }
     }

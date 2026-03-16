@@ -463,7 +463,7 @@ const writeAscii = (target: Uint8Array, offset: number, value: string): void => 
 };
 
 // Nova Sonic returns LPCM bytes; wrap them in a WAV container for browser playback.
-const encodePcm16LeToWav = (pcmBytes: Uint8Array, sampleRate: number): Uint8Array => {
+export const encodePcm16LeToWav = (pcmBytes: Uint8Array, sampleRate: number): Uint8Array => {
   const channelCount = 1;
   const bitsPerSample = 16;
   const bytesPerSample = bitsPerSample / 8;
@@ -1587,5 +1587,388 @@ export const synthesizeSpeechAudio = async (text: string, speaker: Speaker): Pro
     voiceId
   });
   return invokeLegacyAudioPath(text, modelId, voiceId);
+};
+
+// ---------------------------------------------------------------------------
+// Nova Sonic Agent Mode — Sonic generates its OWN response (text + audio)
+// ---------------------------------------------------------------------------
+
+export interface SonicAgentCallbacks {
+  onAudioChunk: (pcmBytes: Uint8Array, sampleRate: number) => void;
+  onTextChunk: (text: string) => void;
+}
+
+export interface SonicAgentParams {
+  systemPrompt: string;
+  userPrompt: string;
+  voiceId: string;
+}
+
+export interface SonicAgentResult {
+  fullText: string;
+  totalAudioBytes: number;
+}
+
+const buildSonicAgentRequestEvents = (
+  systemPrompt: string,
+  userPrompt: string,
+  voiceId: string,
+  sampleRateHertz: number
+): SonicScheduledRequestEvent[] => {
+  const promptName = `prompt-${randomUUID()}`;
+  const systemContentName = `system-${randomUUID()}`;
+  const audioInputContentName = `audio-${randomUUID()}`;
+  const userTextContentName = `text-${randomUUID()}`;
+
+  const preTextSilenceFrames = buildSilentAudioInputFrames(
+    SONIC_INPUT_SAMPLE_RATE_HERTZ,
+    SONIC_PRE_TEXT_SILENCE_MS,
+    SONIC_AUDIO_FRAME_DURATION_MS
+  );
+  const postTextSilenceFrames = buildSilentAudioInputFrames(
+    SONIC_INPUT_SAMPLE_RATE_HERTZ,
+    SONIC_POST_TEXT_SILENCE_MS,
+    SONIC_AUDIO_FRAME_DURATION_MS
+  );
+
+  const events: SonicScheduledRequestEvent[] = [
+    // 1. Session start
+    {
+      requestEvent: {
+        event: {
+          sessionStart: {
+            inferenceConfiguration: {
+              maxTokens: 400,
+              topP: 0.9,
+              temperature: 0.7
+            },
+            turnDetectionConfiguration: {
+              endpointingSensitivity: "MEDIUM"
+            }
+          }
+        }
+      }
+    },
+    // 2. Prompt start
+    {
+      requestEvent: {
+        event: {
+          promptStart: {
+            promptName,
+            textOutputConfiguration: {
+              mediaType: "text/plain"
+            },
+            audioOutputConfiguration: {
+              mediaType: "audio/lpcm",
+              encoding: "base64",
+              audioType: "SPEECH",
+              sampleRateHertz,
+              sampleSizeBits: 16,
+              channelCount: 1,
+              voiceId
+            },
+            toolUseOutputConfiguration: {
+              mediaType: "application/json"
+            }
+          }
+        }
+      }
+    },
+    // 3. System prompt (non-interactive)
+    {
+      requestEvent: {
+        event: {
+          contentStart: {
+            promptName,
+            contentName: systemContentName,
+            type: "TEXT",
+            textInputConfiguration: { mediaType: "text/plain" },
+            interactive: false,
+            role: "SYSTEM"
+          }
+        }
+      }
+    },
+    {
+      requestEvent: {
+        event: {
+          textInput: {
+            promptName,
+            contentName: systemContentName,
+            content: systemPrompt
+          }
+        }
+      }
+    },
+    {
+      requestEvent: {
+        event: {
+          contentEnd: { promptName, contentName: systemContentName }
+        }
+      }
+    },
+    // 4. Open user audio stream
+    {
+      requestEvent: {
+        event: {
+          contentStart: {
+            promptName,
+            contentName: audioInputContentName,
+            type: "AUDIO",
+            audioInputConfiguration: {
+              mediaType: "audio/lpcm",
+              sampleRateHertz: SONIC_INPUT_SAMPLE_RATE_HERTZ,
+              sampleSizeBits: SONIC_INPUT_SAMPLE_SIZE_BITS,
+              channelCount: SONIC_INPUT_CHANNEL_COUNT,
+              audioType: "SPEECH",
+              encoding: "base64"
+            },
+            interactive: true,
+            role: "USER"
+          }
+        }
+      }
+    },
+    // 5. Pre-text silence
+    ...preTextSilenceFrames.map((frame) => ({
+      requestEvent: {
+        event: {
+          audioInput: {
+            promptName,
+            contentName: audioInputContentName,
+            content: frame.base64
+          }
+        }
+      },
+      delayAfterMs: frame.durationMs
+    })),
+    // 6. User text input (the debate prompt — NOT text to read aloud)
+    {
+      requestEvent: {
+        event: {
+          contentStart: {
+            promptName,
+            contentName: userTextContentName,
+            type: "TEXT",
+            textInputConfiguration: { mediaType: "text/plain" },
+            interactive: true,
+            role: "USER"
+          }
+        }
+      }
+    },
+    {
+      requestEvent: {
+        event: {
+          textInput: {
+            promptName,
+            contentName: userTextContentName,
+            content: userPrompt
+          }
+        }
+      }
+    },
+    {
+      requestEvent: {
+        event: {
+          contentEnd: { promptName, contentName: userTextContentName }
+        }
+      }
+    },
+    // 7. Post-text silence
+    ...postTextSilenceFrames.map((frame) => ({
+      requestEvent: {
+        event: {
+          audioInput: {
+            promptName,
+            contentName: audioInputContentName,
+            content: frame.base64
+          }
+        }
+      },
+      delayAfterMs: frame.durationMs
+    })),
+    // 8. Close audio stream
+    {
+      requestEvent: {
+        event: {
+          contentEnd: { promptName, contentName: audioInputContentName }
+        }
+      },
+      delayAfterMs: SONIC_PROMPT_END_DELAY_MS
+    },
+    // 9. End prompt and session
+    {
+      requestEvent: {
+        event: {
+          promptEnd: { promptName }
+        }
+      },
+      delayAfterMs: SONIC_SESSION_END_DELAY_MS
+    },
+    {
+      requestEvent: {
+        event: {
+          sessionEnd: {}
+        }
+      }
+    }
+  ];
+
+  assertSonicRequestHasRequiredAudioContent(events.map((e) => e.requestEvent));
+
+  logInfo("audio", "Built Nova Sonic AGENT request events", {
+    eventCount: events.length,
+    systemPromptLength: systemPrompt.length,
+    userPromptLength: userPrompt.length,
+    voiceId,
+    sampleRateHertz
+  });
+
+  return events;
+};
+
+export const invokeSonicAsAgent = async (
+  params: SonicAgentParams,
+  callbacks: SonicAgentCallbacks
+): Promise<SonicAgentResult> => {
+  const { systemPrompt, userPrompt, voiceId } = params;
+  const bedrock = getBedrockClient();
+  const configuredSampleRate = resolveSonicSampleRate();
+
+  const modelId = resolveBedrockModelId({
+    configuredModelId: appConfig.models.ttsOrSonic,
+    explicitInferenceProfileId: appConfig.models.ttsOrSonicInferenceProfile,
+    region: process.env.AWS_REGION,
+    scope: "audio"
+  });
+
+  if (!modelId) {
+    throw new Error("BEDROCK_MODEL_ID_TTS_OR_SONIC is required for Sonic agent mode.");
+  }
+
+  logInfo("audio", "Starting Nova Sonic agent invocation", {
+    modelId,
+    voiceId,
+    configuredSampleRate,
+    systemPromptLength: systemPrompt.length,
+    userPromptLength: userPrompt.length,
+    userPromptPreview: toPreviewText(userPrompt)
+  });
+
+  const invokeOnce = async (): Promise<SonicAgentResult> => {
+    const requestEvents = buildSonicAgentRequestEvents(systemPrompt, userPrompt, voiceId, configuredSampleRate);
+    const completionSignal = { done: false };
+    const startedAtMs = Date.now();
+
+    const command = new InvokeModelWithBidirectionalStreamCommand({
+      modelId,
+      body: buildSonicRequestBody(requestEvents, completionSignal)
+    });
+
+    const response = (await bedrock.send(command)) as {
+      body?: AsyncIterable<InvokeModelWithBidirectionalStreamOutput>;
+    };
+
+    if (!response.body) {
+      throw new Error("Nova Sonic agent invocation returned no stream body.");
+    }
+
+    return await withTimeout(
+      (async () => {
+        let outputSampleRate = configuredSampleRate;
+        let totalAudioBytes = 0;
+        let fullText = "";
+        let streamEventCount = 0;
+        let audioOutputEventCount = 0;
+
+        for await (const streamEvent of response.body ?? []) {
+          streamEventCount += 1;
+          const streamError = createBidirectionalEventError(streamEvent);
+          if (streamError) {
+            throw streamError;
+          }
+
+          if (!("chunk" in streamEvent)) {
+            continue;
+          }
+
+          const eventBytes = streamEvent.chunk?.bytes;
+          if (!eventBytes || eventBytes.length === 0) {
+            continue;
+          }
+
+          const payload = tryParseJson(eventBytes);
+          if (!payload || typeof payload !== "object") {
+            continue;
+          }
+
+          const eventName = getSonicPayloadEventName(payload);
+
+          // Extract text output
+          const textContent = getByPath(payload, "event.textOutput.content");
+          if (typeof textContent === "string" && textContent.length > 0) {
+            fullText += textContent;
+            callbacks.onTextChunk(textContent);
+          }
+
+          // Extract audio output — stream immediately
+          const base64Audio = getByPath(payload, "event.audioOutput.content");
+          if (typeof base64Audio === "string" && base64Audio.length > 0) {
+            audioOutputEventCount += 1;
+            const decodedAudio = new Uint8Array(Buffer.from(base64Audio, "base64"));
+            totalAudioBytes += decodedAudio.length;
+            callbacks.onAudioChunk(decodedAudio, outputSampleRate);
+          }
+
+          // Track sample rate from contentStart
+          const streamedSampleRate = getByPath(payload, "event.contentStart.audioOutputConfiguration.sampleRateHertz");
+          if (typeof streamedSampleRate === "number" && streamedSampleRate > 0) {
+            outputSampleRate = streamedSampleRate;
+          }
+
+          // Signal completion so silence frames are skipped
+          if (eventName === "completionEnd") {
+            completionSignal.done = true;
+          }
+        }
+
+        logInfo("audio", "Nova Sonic agent stream completed", {
+          modelId,
+          elapsedMs: Date.now() - startedAtMs,
+          streamEventCount,
+          audioOutputEventCount,
+          totalAudioBytes,
+          textLength: fullText.length,
+          textPreview: toPreviewText(fullText)
+        });
+
+        return { fullText, totalAudioBytes };
+      })(),
+      appConfig.conversation.bedrockTimeoutMs,
+      "sonicAgentRead"
+    );
+  };
+
+  return withRetry(
+    invokeOnce,
+    {
+      maxAttempts: appConfig.conversation.bedrockRetries + 1,
+      baseDelayMs: appConfig.conversation.bedrockRetryBaseDelayMs,
+      maxDelayMs: appConfig.conversation.bedrockRetryMaxDelayMs,
+      jitterRatio: appConfig.conversation.bedrockRetryJitterRatio,
+      onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
+        logWarn("audio", "Retrying Nova Sonic agent invocation", {
+          modelId,
+          voiceId,
+          attempt,
+          maxAttempts,
+          delayMs,
+          ...toErrorMetadata(error)
+        });
+      }
+    },
+    "sonicAgentInvoke"
+  );
 };
 
