@@ -135,8 +135,6 @@ export default function HomePage() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<Array<string>>([]);
-  const activeUrlRef = useRef<string | null>(null);
   const isPlayingRef = useRef(false);
   const sessionEndedRef = useRef(false);
   const segmentBufferRef = useRef<Map<string, Uint8Array[]>>(new Map());
@@ -150,6 +148,12 @@ export default function HomePage() {
   // Set to true when the server sends the final segment marker for a turn.
   // Cleared after CLIENT_SPEECH_DONE is sent, signalling playback is complete.
   const pendingTurnDoneRef = useRef(false);
+  // Web Audio API context for gapless scheduling (replaces HTMLAudioElement queue).
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  // The scheduled end time of the last queued buffer (audioCtx.currentTime units).
+  const nextPlayTimeRef = useRef(0);
+  // Serializes decode+schedule so concurrent decodeAudioData calls don't race on nextPlayTimeRef.
+  const scheduleChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const scrollToApp = useCallback(() => {
     document.getElementById("app-section")?.scrollIntoView({ behavior: "smooth" });
@@ -162,26 +166,15 @@ export default function HomePage() {
 
   const resetPlayback = useCallback(() => {
     clientLogInfo("Resetting playback state", {
-      queuedUrls: audioQueueRef.current.length,
-      hasActiveUrl: Boolean(activeUrlRef.current),
       bufferedSegments: segmentBufferRef.current.size
     });
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.removeAttribute("src");
-      audioRef.current.load();
+    if (audioCtxRef.current) {
+      void audioCtxRef.current.close();
+      audioCtxRef.current = null;
     }
-
-    if (activeUrlRef.current) {
-      URL.revokeObjectURL(activeUrlRef.current);
-      activeUrlRef.current = null;
-    }
-
-    for (const item of audioQueueRef.current) {
-      URL.revokeObjectURL(item);
-    }
-    audioQueueRef.current = [];
+    nextPlayTimeRef.current = 0;
+    scheduleChainRef.current = Promise.resolve();
     segmentBufferRef.current.clear();
     isPlayingRef.current = false;
     sessionEndedRef.current = false;
@@ -208,80 +201,18 @@ export default function HomePage() {
   }, []);
 
   const finalizeIfEnded = useCallback(() => {
-    if (sessionEndedRef.current && !isPlayingRef.current && audioQueueRef.current.length === 0) {
+    const ctx = audioCtxRef.current;
+    const audioActive = ctx ? ctx.currentTime < nextPlayTimeRef.current - 0.1 : false;
+    if (sessionEndedRef.current && !audioActive) {
       clientLogInfo("Finalizing UI phase after session end", {
-        isPlaying: isPlayingRef.current,
-        queueLength: audioQueueRef.current.length
+        audioActive,
+        scheduledUntil: nextPlayTimeRef.current.toFixed(3)
       });
       setPhase((current: UiPhase) => (current === "error" ? current : "ended"));
     }
   }, []);
 
-  const pumpQueue = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || isPaused || isPlayingRef.current) {
-      return;
-    }
-    const nextUrl = audioQueueRef.current.shift();
-    if (!nextUrl) {
-      finalizeIfEnded();
-      if (pendingTurnDoneRef.current) {
-        pendingTurnDoneRef.current = false;
-        const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
-        }
-      }
-      return;
-    }
-
-    audio.src = nextUrl;
-    audio.volume = 1;
-    activeUrlRef.current = nextUrl;
-    isPlayingRef.current = true;
-    clientLogInfo("Starting playback for queued audio blob", {
-      queueLengthAfterShift: audioQueueRef.current.length
-    });
-
-    void audio.play().catch(() => {
-      clientLogWarn("Audio playback call rejected in pumpQueue");
-      isPlayingRef.current = false;
-    });
-  }, [finalizeIfEnded, isPaused]);
-
-  useEffect(() => {
-    if (!audioRef.current) {
-      return;
-    }
-
-    const audio = audioRef.current;
-    const onPlay = () => setIsAudioPlaying(true);
-    const onPause = () => setIsAudioPlaying(false);
-    const onEnded = () => {
-      clientLogInfo("Audio element ended playback");
-      setIsAudioPlaying(false);
-      isPlayingRef.current = false;
-      if (activeUrlRef.current) {
-        URL.revokeObjectURL(activeUrlRef.current);
-        activeUrlRef.current = null;
-      }
-      pumpQueue();
-    };
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", onEnded);
-    return () => {
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", onEnded);
-    };
-  }, [pumpQueue]);
-
-  useEffect(() => {
-    if (!isPaused) {
-      pumpQueue();
-    }
-  }, [isPaused, pumpQueue]);
+  // No HTMLAudioElement queue — scheduling is handled by AudioContext below.
 
   // Wire pause/resume into Web Speech API
   useEffect(() => {
@@ -318,17 +249,55 @@ export default function HomePage() {
     (bytes: Uint8Array, mimeType: string) => {
       const normalized = new Uint8Array(bytes.length);
       normalized.set(bytes);
-      const blob = new Blob([normalized.buffer], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      audioQueueRef.current.push(url);
-      clientLogInfo("Enqueued synthesized audio blob", {
-        bytesLength: bytes.length,
-        mimeType,
-        queueLength: audioQueueRef.current.length
-      });
-      pumpQueue();
+
+      const schedule = async () => {
+        try {
+          if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+            audioCtxRef.current = new AudioContext();
+          }
+          const ctx = audioCtxRef.current;
+          if (ctx.state === "suspended") await ctx.resume();
+
+          const audioBuffer = await ctx.decodeAudioData(normalized.buffer.slice(0, normalized.byteLength));
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+
+          const now = ctx.currentTime;
+          const startTime = Math.max(now + 0.12, nextPlayTimeRef.current);
+          source.start(startTime);
+          nextPlayTimeRef.current = startTime + audioBuffer.duration;
+
+          setIsAudioPlaying(true);
+          clientLogInfo("Scheduled audio chunk via AudioContext", {
+            bytesLength: bytes.length,
+            mimeType,
+            startTime: startTime.toFixed(3),
+            duration: audioBuffer.duration.toFixed(3)
+          });
+
+          source.onended = () => {
+            const ctxNow = audioCtxRef.current?.currentTime ?? 0;
+            if (ctxNow >= nextPlayTimeRef.current - 0.1) {
+              setIsAudioPlaying(false);
+              finalizeIfEnded();
+              if (pendingTurnDoneRef.current) {
+                pendingTurnDoneRef.current = false;
+                const ws = wsRef.current;
+                if (ws?.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+                }
+              }
+            }
+          };
+        } catch {
+          clientLogWarn("Audio scheduling failed — skipping chunk");
+        }
+      };
+
+      scheduleChainRef.current = scheduleChainRef.current.then(() => schedule());
     },
-    [pumpQueue]
+    [finalizeIfEnded]
   );
 
   const sendInjection = useCallback((text: string) => {
@@ -492,15 +461,8 @@ export default function HomePage() {
               speaker: payload.speaker,
               turnIndex: payload.turnIndex
             });
-            // If queue already drained, signal immediately; otherwise defer to pumpQueue.
-            if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-              const ws = wsRef.current;
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
-              }
-            } else {
-              pendingTurnDoneRef.current = true;
-            }
+            // source.onended on the last scheduled buffer will send CLIENT_SPEECH_DONE.
+            pendingTurnDoneRef.current = true;
           }
           return;
         }
@@ -533,6 +495,10 @@ export default function HomePage() {
             mergedBytesLength: segmentBytes.length
           });
           enqueueAudioBlob(segmentBytes, payload.mimeType);
+          if (payload.isFinalSegment) {
+            // Legacy server-TTS: mark turn done; source.onended will send CLIENT_SPEECH_DONE.
+            pendingTurnDoneRef.current = true;
+          }
         }
         return;
       }
@@ -697,29 +663,16 @@ export default function HomePage() {
   }, [disconnectWs, prompt, resetPlayback, startSession]);
 
   const togglePause = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) {
-      return;
-    }
     if (!isPaused) {
       clientLogInfo("Pausing playback");
-      audio.pause();
+      void audioCtxRef.current?.suspend();
       setIsPaused(true);
       return;
     }
-
     clientLogInfo("Resuming playback");
+    void audioCtxRef.current?.resume();
     setIsPaused(false);
-    if (audio.src && audio.paused) {
-      void audio.play().catch(() => {
-        clientLogWarn("Audio playback failed to resume");
-        setErrorMessage("Playback failed to resume.");
-      });
-      isPlayingRef.current = true;
-      return;
-    }
-    pumpQueue();
-  }, [isPaused, pumpQueue]);
+  }, [isPaused]);
 
   const handleRestart = useCallback(() => {
     if (!selectedMode) {

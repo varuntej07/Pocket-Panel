@@ -266,7 +266,7 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
         let pcmBuffer: Uint8Array[] = [];
         let bufferBytes = 0;
         let sampleRate = 24000;
-        const FLUSH_THRESHOLD = 9600; // ~200ms at 24kHz mono 16-bit
+        const FLUSH_THRESHOLD = 4800; // ~100ms at 24kHz mono 16-bit
 
         const flushPcmBuffer = () => {
           if (bufferBytes === 0) return;
@@ -439,6 +439,9 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
               isFinalSegment: segmentIndex === segments.length - 1
             });
           }
+
+          // Wait for client to finish playing before generating the next turn.
+          await awaitSpeechDone(sessionId, 90_000);
         }
       }
     }
