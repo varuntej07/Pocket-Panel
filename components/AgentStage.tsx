@@ -23,6 +23,19 @@ interface AgentStageProps {
 
 const TOTAL_TURNS = 8;
 
+const WAITING_CAPTIONS = [
+  "Sharpening the next point…",
+  "Weighing the counterargument…",
+  "Finding the right words…",
+  "Building on what was said…",
+  "Letting that satisfying silence hang…",
+  "Gathering a fresh angle…",
+  "The tension builds…",
+  "Choosing which hill to die on…",
+  "Reading the room…",
+  "Loading a rebuttal…",
+];
+
 export function AgentStage({
   nowSpeaking,
   topicBreadcrumb,
