@@ -22,6 +22,4 @@ COPY --from=builder /app/server ./server
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-EXPOSE 3000
-
 CMD ["npm", "start"]
