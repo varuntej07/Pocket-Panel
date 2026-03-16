@@ -128,6 +128,8 @@ export default function HomePage() {
   const [nowSpeaking, setNowSpeaking] = useState<Speaker | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef = useRef(false);
+  const pausedTurnDonePendingRef = useRef(false);
   const [transcriptTurns, setTranscriptTurns] = useState<TranscriptTurn[]>([]);
   const [synthesisText, setSynthesisText] = useState("");
   const [synthesisComplete, setSynthesisComplete] = useState(false);
@@ -181,6 +183,8 @@ export default function HomePage() {
     speechGenRef.current++; // invalidate any active speech generation
     receivedAudioForTurnRef.current.clear();
     pendingTurnDoneRef.current = false;
+    isPausedRef.current = false;
+    pausedTurnDonePendingRef.current = false;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -256,7 +260,7 @@ export default function HomePage() {
             audioCtxRef.current = new AudioContext();
           }
           const ctx = audioCtxRef.current;
-          if (ctx.state === "suspended") await ctx.resume();
+          if (ctx.state === "suspended" && !isPausedRef.current) await ctx.resume();
 
           const audioBuffer = await ctx.decodeAudioData(normalized.buffer.slice(0, normalized.byteLength));
           const source = ctx.createBufferSource();
@@ -283,9 +287,13 @@ export default function HomePage() {
               finalizeIfEnded();
               if (pendingTurnDoneRef.current) {
                 pendingTurnDoneRef.current = false;
-                const ws = wsRef.current;
-                if (ws?.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+                if (isPausedRef.current) {
+                  pausedTurnDonePendingRef.current = true;
+                } else {
+                  const ws = wsRef.current;
+                  if (ws?.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+                  }
                 }
               }
             }
@@ -665,13 +673,22 @@ export default function HomePage() {
   const togglePause = useCallback(() => {
     if (!isPaused) {
       clientLogInfo("Pausing playback");
+      isPausedRef.current = true;
       void audioCtxRef.current?.suspend();
       setIsPaused(true);
       return;
     }
     clientLogInfo("Resuming playback");
+    isPausedRef.current = false;
     void audioCtxRef.current?.resume();
     setIsPaused(false);
+    if (pausedTurnDonePendingRef.current) {
+      pausedTurnDonePendingRef.current = false;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+      }
+    }
   }, [isPaused]);
 
   const handleRestart = useCallback(() => {
