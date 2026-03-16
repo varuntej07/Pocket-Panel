@@ -40,11 +40,10 @@ export const buildSonicAgentUserPrompt = (params: {
   speaker: Speaker;
   turnIndex: number;
   totalTurns: number;
-  opponentText: string | null;
   history: SessionTurn[];
   injectedContext?: string;
 }): string => {
-  const { topic, speaker, turnIndex, totalTurns, opponentText, history, injectedContext } = params;
+  const { topic, speaker, turnIndex, totalTurns, history, injectedContext } = params;
 
   const shortHistory = history
     .slice(-6)
@@ -62,8 +61,8 @@ export const buildSonicAgentUserPrompt = (params: {
 
   if (turnIndex === 1) {
     parts.push("You go first. Make your opening argument.");
-  } else if (opponentText) {
-    parts.push(`[them]: ${opponentText}\n\nRespond to what they just said. Speak your turn now.`);
+  } else {
+    parts.push("The other speaker just finished their turn (shown above). Now counter their argument directly. Stay in your own voice.");
   }
 
   if (injectedContext) {

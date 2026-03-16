@@ -7,21 +7,43 @@ interface TopicLibraryProps {
 }
 
 const TOPICS = [
-  "Should AI systems be allowed to make binding legal decisions?",
-  "Universal basic income: safety net or economic trap?",
-  "Nuclear energy is the only realistic path to net zero",
-  "Is remote work permanently degrading collaboration and culture?",
-  "Should social media platforms be regulated as public utilities?",
-  "Consciousness: emergent property of matter or something irreducible?",
-  "Can gene editing eliminate inherited disease within a generation?",
-  "Cryptocurrency — legitimate currency or institutionalized speculation?",
-  "Space colonization: humanity's insurance policy or a billionaire fantasy?",
-  "Free will vs determinism — does neuroscience settle the debate?",
+  // Everyday life & work
+  "Is a 4-day work week actually more productive?",
+  "Should tipping culture be abolished in restaurants?",
+  "Is college still worth now?", "Should phones be banned in schools?",
+  "WFH vs office - which actually wins?", "Throughput vs creativity: which matters?",
+  "Are landlords contributing to the housing crisis?",
+  "Is hustle culture doing more harm than good?",
+
+  // Tech & AI
+  "Will AI take more jobs than it creates?", "AI vs human creativity",
+  "Should social media have an age minimum of 16?", "Model Training vs Inference",
+  "Is TikTok a national security threat or a moral panic?",
+  "Should self-driving cars be allowed on public roads today?",
+  "Do we rely too much on smartphones?",
+
+  // Money & economy
+  "Is cryptocurrency a legitimate investment or glorified gambling?",
+  "Should the minimum wage be tied to inflation automatically?",
+  "Is universal basic income a safety net or a poverty trap?",
+  "Are subscription services quietly bleeding consumers dry?",
+
+  // Health & lifestyle
+  "Should fast food companies be taxed like tobacco?",
+  "Is veganism the most ethical diet or an oversimplification?",
+  "Should healthcare be completely free at the point of use?",
+
+  // Society & politics
+  "Should voting be mandatory?",
+  "Is cancel culture a necessary accountability tool or mob justice?",
   "Should billionaires exist in a functioning democracy?",
-  "Open-source AI: accelerating progress or accelerating risk?",
-  // Tool-calling topics — benefit from live data lookup
-  "What do the latest AI chip export restrictions mean for global tech power?",
-  "How are central banks currently responding to persistent inflation?",
+  "Should the death penalty be abolished everywhere?",
+
+  // Science & future
+  "Should we be colonizing Mars or fixing Earth first?",
+  "Is nuclear energy the safest path to clean power?",
+  "Should gene editing to prevent inherited disease be legal?",
+  "Are we heading toward a surveillance state and is that inevitable?",
 ];
 
 export function TopicLibrary({ onSelect }: TopicLibraryProps) {

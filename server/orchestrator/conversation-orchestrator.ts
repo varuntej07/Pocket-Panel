@@ -247,16 +247,11 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           assignedPosition: agentPosition
         });
 
-        const opponentText = turnIndex === 1
-          ? null
-          : activeSession.turns[activeSession.turns.length - 1]?.text ?? "";
-
         const userPrompt = buildSonicAgentUserPrompt({
           topic: activeSession.prompt,
           speaker,
           turnIndex,
           totalTurns: appConfig.conversation.totalTurns,
-          opponentText,
           history: historyWithInjection,
           injectedContext: injectedText ?? undefined
         });
