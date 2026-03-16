@@ -1543,6 +1543,8 @@ const invokeLegacyAudioPath = async (text: string, modelId: string, voiceId: str
   throw synthesisError;
 };
 
+// ---------------------------------------------------------------------------
+
 export const synthesizeSpeechAudio = async (text: string, speaker: Speaker): Promise<SpeechSynthesisResult> => {
   const modelId = resolveBedrockModelId({
     configuredModelId: appConfig.models.ttsOrSonic,

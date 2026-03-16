@@ -5,6 +5,22 @@ import { AgentAvatar } from "./AgentAvatar";
 import { WaveformVisualizer } from "./WaveformVisualizer";
 import type { Speaker } from "../lib/types";
 
+const WAITING_CAPTIONS = [
+  "Synthesizing the debate…",
+  "Agents contemplating their next move…",
+  "Warming up the vocal cords…",
+  "Formulating counterarguments…",
+  "Cross-referencing the facts…",
+  "Agents deep in thought…",
+  "Preparing a compelling point…",
+  "Loading perspectives…",
+  "Calibrating opinions…",
+  "The stage is almost set…",
+  "Consulting the argument playbook…",
+  "Agent A sharpening their rhetoric…",
+  "Brewing the perfect rebuttal…",
+];
+
 interface TranscriptTurn {
   speaker: Speaker | "moderator";
   turnIndex: number;
@@ -20,6 +36,7 @@ interface AgentStageProps {
   synthesisComplete: boolean;
   phase: string;
   audioRef: React.RefObject<HTMLAudioElement | null>;
+  isAudioPlaying: boolean;
 }
 
 const TOTAL_TURNS = 8;
@@ -31,9 +48,11 @@ export function AgentStage({
   transcriptTurns,
   phase,
   audioRef,
+  isAudioPlaying,
 }: AgentStageProps) {
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(true);
+  const [captionIndex, setCaptionIndex] = useState(0);
 
   useEffect(() => {
     if (transcriptOpen) {
@@ -41,11 +60,20 @@ export function AgentStage({
     }
   }, [transcriptTurns.length, transcriptOpen]);
 
+  // Rotate captions while waiting for audio
+  const showCaptions = phase === "live" && !isAudioPlaying;
+  useEffect(() => {
+    if (!showCaptions) return;
+    const id = setInterval(() => {
+      setCaptionIndex((i) => (i + 1) % WAITING_CAPTIONS.length);
+    }, 2500);
+    return () => clearInterval(id);
+  }, [showCaptions]);
+
   const agentTurns = transcriptTurns.filter((t) => t.speaker !== "moderator");
   const currentTurn = agentTurns.length;
   const progressPct = Math.min((currentTurn / TOTAL_TURNS) * 100, 100);
   const showProgress = phase === "live" || phase === "ended";
-  const isActive = phase === "live" && nowSpeaking !== null;
   const isEnded = phase === "ended";
 
   return (
@@ -63,13 +91,17 @@ export function AgentStage({
         <AgentAvatar agent="B" isActive={nowSpeaking === "B"} phase={phase} />
       </div>
 
-      {/* Waveform */}
+      {/* Waveform or waiting captions */}
       <div className="waveformWrap">
-        <WaveformVisualizer audioRef={audioRef} isActive={isActive} nowSpeaking={nowSpeaking} />
+        {showCaptions ? (
+          <p className="waitingCaption">{WAITING_CAPTIONS[captionIndex]}</p>
+        ) : (
+          <WaveformVisualizer audioRef={audioRef} isActive={isAudioPlaying} nowSpeaking={nowSpeaking} />
+        )}
       </div>
 
       <p className="nowSpeaking">
-        {nowSpeaking ? `Agent ${nowSpeaking} speaking` : phase === "live" ? "Standby…" : "Waiting to start"}
+        {isAudioPlaying && nowSpeaking ? `Agent ${nowSpeaking} speaking` : phase === "live" ? "Standby…" : "Waiting to start"}
       </p>
 
       {/* Progress indicator */}

@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Socket } from "node:net";
 import { URL } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { clearSessionSocket, getSession, markSessionEnded, setPendingInjection, setSessionSocket } from "../../lib/session-store";
+import { clearSessionSocket, getSession, markSessionEnded, setPendingInjection, setSessionSocket, signalSpeechDone } from "../../lib/session-store";
 import { logError, logInfo } from "../../lib/telemetry";
 import { startConversationIfNeeded } from "../orchestrator/conversation-orchestrator";
 import type { ServerWsEvent } from "./protocol";
@@ -86,6 +86,10 @@ export const attachWebSocketServer = (server: HttpServer): void => {
         if (parsed.type === "USER_INJECT" && typeof parsed.text === "string" && parsed.text.trim().length > 0) {
           setPendingInjection(sessionId, parsed.text.trim());
           logInfo("ws", "User injection queued", { sessionId, textLength: parsed.text.length });
+        }
+        if (parsed.type === "CLIENT_SPEECH_DONE") {
+          signalSpeechDone(sessionId);
+          logInfo("ws", "Client speech done signal received", { sessionId });
         }
       } catch {
         // Non-JSON message — ignore

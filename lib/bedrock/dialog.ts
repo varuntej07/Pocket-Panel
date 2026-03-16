@@ -28,11 +28,26 @@ const fallbackUtterance = (params: GenerateDialogTurnParams): string => {
   return `${prefix} on ${topic}: this ${mode.category} turn ${turnIndex} keeps the argument focused, concrete, and easy to follow by audio.`;
 };
 
-const retryOptions = {
-  maxAttempts: appConfig.conversation.bedrockRetries + 1,
-  baseDelayMs: appConfig.conversation.bedrockRetryBaseDelayMs,
-  maxDelayMs: appConfig.conversation.bedrockRetryMaxDelayMs,
-  jitterRatio: appConfig.conversation.bedrockRetryJitterRatio
+const searchWebToolConfig = {
+  tools: [
+    {
+      toolSpec: {
+        name: "search_web",
+        description:
+          "Search the web for current facts, statistics, or recent events to support your argument.",
+        inputSchema: {
+          json: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Concise search query (under 10 words)" }
+            },
+            required: ["query"]
+          } as never
+        }
+      }
+    }
+  ]
+  // No toolChoice — Nova Pro does not support the toolChoice field in the Converse API.
 };
 
 type ConverseResponse = {
@@ -54,29 +69,6 @@ const extractText = (contentBlocks: Array<Record<string, unknown>>): string =>
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
-
-const searchWebToolConfig = {
-  tools: [
-    {
-      toolSpec: {
-        name: "search_web",
-        description:
-          "Search the web for current facts, statistics, or recent events to support your argument.",
-        inputSchema: {
-          json: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "Concise search query (under 10 words)" }
-            },
-            required: ["query"]
-          } as never
-        }
-      }
-    }
-  ]
-  // No toolChoice — Nova Pro does not support the toolChoice field in the Converse API.
-  // Omitting it lets the model autonomously decide whether to invoke search_web.
-};
 
 export const generateDialogTurn = async (
   params: GenerateDialogTurnParams,
@@ -111,12 +103,24 @@ export const generateDialogTurn = async (
     params.agentPosition
   );
 
+  // Only offer the search tool when a user has injected a question — those turns
+  // may legitimately need real-time data. Normal debate turns use the model's
+  // training knowledge directly (faster, and no tool-call overhead).
+  const hasUserInjection = params.history.some((t) => t.speaker === "moderator");
+
+  const retryOptions = {
+    maxAttempts: appConfig.conversation.bedrockRetries + 1,
+    baseDelayMs: appConfig.conversation.bedrockRetryBaseDelayMs,
+    maxDelayMs: appConfig.conversation.bedrockRetryMaxDelayMs,
+    jitterRatio: appConfig.conversation.bedrockRetryJitterRatio
+  };
+
   try {
     const firstCommand = new ConverseCommand({
       modelId,
       system: [{ text: systemPrompt }],
       messages: [{ role: "user", content: [{ text: userPrompt }] }],
-      toolConfig: searchWebToolConfig,
+      ...(hasUserInjection && { toolConfig: searchWebToolConfig }),
       inferenceConfig: {
         temperature: 0.7,
         maxTokens: 400
@@ -131,74 +135,61 @@ export const generateDialogTurn = async (
 
     const firstContentBlocks = firstResponse.output?.message?.content ?? [];
 
-    // Check if Nova chose to use the search_web tool
-    const toolUseBlock = firstContentBlocks.find(
-      (block: Record<string, unknown>) =>
-        typeof block === "object" &&
-        block !== null &&
-        "toolUse" in block &&
-        typeof (block as { toolUse?: { name?: string } }).toolUse?.name === "string" &&
-        (block as { toolUse?: { name?: string } }).toolUse?.name === "search_web"
-    ) as
-      | { toolUse?: { toolUseId?: string; name?: string; input?: { query?: string } } }
-      | undefined;
+    // Handle tool use only when we actually offered the tool (user injection turns)
+    if (hasUserInjection && firstResponse.stopReason === "tool_use") {
+      const toolUseBlock = firstContentBlocks.find(
+        (block: Record<string, unknown>) =>
+          typeof block === "object" &&
+          block !== null &&
+          "toolUse" in block &&
+          (block as { toolUse?: { name?: string } }).toolUse?.name === "search_web"
+      ) as { toolUse?: { toolUseId?: string; name?: string; input?: { query?: string } } } | undefined;
 
-    if (firstResponse.stopReason === "tool_use" && toolUseBlock?.toolUse) {
-      const toolUseId = toolUseBlock.toolUse.toolUseId ?? "search-tool";
-      const query = toolUseBlock.toolUse.input?.query ?? params.topic;
+      if (toolUseBlock?.toolUse) {
+        const toolUseId = toolUseBlock.toolUse.toolUseId ?? "search-tool";
+        const query = toolUseBlock.toolUse.input?.query ?? params.topic;
 
-      logInfo("dialog", "search_web tool invoked", { query, speaker: params.speaker, turnIndex: params.turnIndex });
-      onToolEvent?.({ phase: "use", query });
+        logInfo("dialog", "search_web tool invoked", { query, speaker: params.speaker, turnIndex: params.turnIndex });
+        onToolEvent?.({ phase: "use", query });
 
-      const sources = await searchWeb(query);
-      onToolEvent?.({ phase: "result", sources });
+        const sources = await searchWeb(query);
+        onToolEvent?.({ phase: "result", sources });
 
-      const searchResultsText =
-        sources.length > 0
-          ? sources
-              .map((s, i) => `${i + 1}. ${s.title}\n   URL: ${s.url}\n   ${s.snippet}`)
-              .join("\n\n")
-          : "No search results found.";
+        const searchResultsText =
+          sources.length > 0
+            ? sources.map((s, i) => `${i + 1}. ${s.title}\n   URL: ${s.url}\n   ${s.snippet}`).join("\n\n")
+            : "No search results found.";
 
-      const secondCommand = new ConverseCommand({
-        modelId,
-        system: [{ text: systemPrompt }],
-        messages: [
-          { role: "user", content: [{ text: userPrompt }] },
-          {
-            role: "assistant",
-            content: firstContentBlocks as never
-          },
-          {
-            role: "user",
-            content: [
-              {
-                toolResult: {
-                  toolUseId,
-                  content: [{ text: searchResultsText }]
-                }
-              } as never
-            ]
+        const secondCommand = new ConverseCommand({
+          modelId,
+          system: [{ text: systemPrompt }],
+          messages: [
+            { role: "user", content: [{ text: userPrompt }] },
+            { role: "assistant", content: firstContentBlocks as never },
+            {
+              role: "user",
+              content: [{ toolResult: { toolUseId, content: [{ text: searchResultsText }] } } as never]
+            }
+          ],
+          toolConfig: searchWebToolConfig,
+          inferenceConfig: {
+            temperature: 0.7,
+            maxTokens: 400
           }
-        ],
-        inferenceConfig: {
-          temperature: 0.7,
-          maxTokens: 400
-        }
-      });
+        });
 
-      const secondResponse = (await withRetry(
-        () => withTimeout(bedrock.send(secondCommand), appConfig.conversation.bedrockTimeoutMs, "generateDialogTurn#2"),
-        retryOptions,
-        "generateDialogTurn#2"
-      )) as ConverseResponse;
+        const secondResponse = (await withRetry(
+          () => withTimeout(bedrock.send(secondCommand), appConfig.conversation.bedrockTimeoutMs, "generateDialogTurn#2"),
+          retryOptions,
+          "generateDialogTurn#2"
+        )) as ConverseResponse;
 
-      const secondContentBlocks = secondResponse.output?.message?.content ?? [];
-      const text = extractText(secondContentBlocks);
-      return text || fallbackUtterance(params);
+        const text = extractText(secondResponse.output?.message?.content ?? []);
+        return text || fallbackUtterance(params);
+      }
     }
 
-    // No tool call — extract text directly from first response
+    // Normal path — extract text from the first (and only) response
     const text = extractText(firstContentBlocks);
     if (!text) {
       return fallbackUtterance(params);

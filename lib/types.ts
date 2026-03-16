@@ -35,6 +35,7 @@ export interface SessionState {
   endedReason?: string;
   lastError?: string;
   pendingInjection?: string;
+  speechDoneResolve?: () => void;
   socket?: {
     readyState: number;
     send: (payload: string) => void;

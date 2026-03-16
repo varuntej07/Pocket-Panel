@@ -44,9 +44,9 @@ if (!globalThis.__POCKET_PANEL_ENV_LOADED__) {
 const runtimeConfig: Pick<AppConfig, "conversation" | "voices" | "audio"> = {
   conversation: {
     totalTurns: 8,
-    maxSecondsPerTurn: 18,
+    maxSecondsPerTurn: 28,
     maxDurationSeconds: 210,
-    bedrockTimeoutMs: 25_000,
+    bedrockTimeoutMs: 35_000,
     bedrockRetries: 2,
     bedrockRetryBaseDelayMs: 300,
     bedrockRetryMaxDelayMs: 6_000,
@@ -56,7 +56,7 @@ const runtimeConfig: Pick<AppConfig, "conversation" | "voices" | "audio"> = {
   },
   voices: {
     agentA: "matthew",
-    agentB: "tiffany"
+    agentB: "amy"
   },
   audio: {
     mimeType: "audio/wav",

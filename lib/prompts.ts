@@ -12,7 +12,7 @@ export const buildSynthesisPrompt = (
     .join("\n\n");
 
   const systemPrompt = [
-    "You are an expert debate analyst. After reviewing a debate transcript, produce a structured post-debate synthesis.",
+    "You are an expert podcaster. After reviewing a debate transcript, produce a structured post-debate synthesis.",
     "Be objective, precise, and insightful. Use plain text only — no markdown headers or bullet points.",
     "Structure your response with these clearly labeled sections:",
     "AGENT A POSITION: | AGENT B POSITION: | STRONGEST ARGUMENT (A): | STRONGEST ARGUMENT (B): | LOGICAL VERDICT: | FOLLOW-UP QUESTIONS:"
@@ -32,10 +32,11 @@ export const buildSynthesisPrompt = (
 };
 
 const moderatorSpec = [
-  "You are a strict moderator controlling a two-agent voice conversation.",
-  "Enforce turn-taking with zero overlap and no interruptions.",
-  "Keep each turn concise and spoken-language friendly.",
+  "You are participating in a live two-person voice conversation.",
+  "Speak in full, complete sentences — never cut a thought short.",
   "No bullet points or markdown; output plain natural speech only.",
+  "Use contractions, natural rhythm, and vary sentence length — this is audio.",
+  "CRITICAL: Never say your name, role, or position label. Never say 'Agent A', 'Agent B', 'Voice 1', 'Voice 2', 'As the pro side', 'As the against side', or any self-introduction. Jump straight into your point.",
   "No unsafe content, hate, harassment, or instructions for wrongdoing."
 ].join(" ");
 
@@ -58,17 +59,17 @@ export const buildClassifierUserPrompt = (prompt: string, modeCatalog: ModeSugge
 
 const formatRulesByCategory: Record<ModeSuggestion["category"], string> = {
   debate:
-    "Debate format: claims, counterclaims, evidence, short crisp turns, clear challenges each turn.",
+    "Debate format: make a clear claim, back it with reasoning or an example, then challenge the other side with a pointed question or rebuttal.",
   teaching:
     "Teaching format: Socratic style, step-by-step instruction, concept checks, concrete examples.",
   podcast:
-    "Podcast format: host and guest vibe, richer turns, conversational pacing, recap near ending.",
+    "Podcast format: host and guest vibe, rich conversational turns, natural pacing, recap near ending.",
   argument:
     "Argument format: adversarial but safe and respectful, sharp disagreement, no abusive language."
 };
 
-export const buildSceneSetup = (prompt: string, mode: ModeSuggestion): string =>
-  `Scene setup: two expert voices face each other on "${prompt}". The format is ${mode.title}, so the exchange stays focused, vivid, and easy to follow by ear.`;
+export const buildSceneSetup = (prompt: string, _mode: ModeSuggestion): string =>
+  `Today's topic: ${prompt}. Let's get into it.`;
 
 export const buildDialogSystemPrompt = (
   mode: ModeSuggestion,
@@ -76,11 +77,11 @@ export const buildDialogSystemPrompt = (
   targetSpeaker: Speaker,
   assignedPosition?: string
 ): string => {
-  const approximateWords = Math.max(35, Math.round(maxSecondsPerTurn * 2.4));
+  const approximateWords = Math.max(60, Math.round(maxSecondsPerTurn * 2.5));
   const speakerInstruction =
     targetSpeaker === "A"
-      ? "You are Agent A. You lead with clear framing and sharp structure."
-      : "You are Agent B. You respond directly and pressure-test assumptions.";
+      ? "You open the exchange. Make a sharp, confident claim and own it. No introduction — start with your point."
+      : "You respond to what was just said. Disagree directly, push back with conviction. React like you genuinely heard it and want to challenge it. No preamble.";
   const positionInstruction = assignedPosition
     ? `Your assigned position: ${assignedPosition} Hold it firmly throughout.`
     : "";
@@ -91,8 +92,8 @@ export const buildDialogSystemPrompt = (
     positionInstruction,
     formatRulesByCategory[mode.category],
     `Mode guidance: ${mode.formatGuidance}`,
-    `Target length: around ${approximateWords} words so it sounds like about ${maxSecondsPerTurn} seconds.`,
-    "You have a search_web tool. Use it when citing current facts, statistics, or recent events strengthens your argument."
+    `Target length: ${approximateWords} words — that is 3 to 5 complete sentences. Always finish every sentence you start. Never stop mid-thought.`,
+    "Avoid 'First', 'Second', 'Finally', 'In conclusion', and other essay transitions. Speak like you're in a heated room, not writing an op-ed."
   ]
     .filter(Boolean)
     .join(" ");
@@ -109,15 +110,17 @@ export const buildDialogUserPrompt = (params: {
   const { topic, mode, speaker, turnIndex, totalTurns, history } = params;
   const shortHistory = history
     .slice(-6)
-    .map((turn) => (turn.speaker === "moderator" ? `[MODERATOR]: ${turn.text}` : `${turn.speaker}: ${turn.text}`))
+    .map((turn) => {
+      if (turn.speaker === "moderator") return `[moderator]: ${turn.text}`;
+      return turn.speaker === speaker ? `[you]: ${turn.text}` : `[them]: ${turn.text}`;
+    })
     .join("\n");
 
   return [
     `Topic: ${topic}`,
     `Mode: ${mode.title} (${mode.category})`,
-    `Current turn: ${turnIndex}/${totalTurns}`,
-    `Current speaker: Agent ${speaker}`,
-    shortHistory ? `Recent context:\n${shortHistory}` : "Recent context: none yet",
-    "Deliver one natural spoken turn only. Do not include stage directions."
+    `Turn: ${turnIndex} of ${totalTurns}`,
+    shortHistory ? `Conversation so far:\n${shortHistory}` : "Conversation so far: none yet",
+    "Speak your turn now. Do not introduce yourself or announce your side. Start directly with your argument."
   ].join("\n\n");
 };

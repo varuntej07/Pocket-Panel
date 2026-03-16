@@ -140,3 +140,33 @@ export const consumePendingInjection = (sessionId: string): string | undefined =
 };
 
 export const listSessions = (): SessionState[] => Array.from(globalStore.sessions.values());
+
+// Used by the browser-TTS flow: orchestrator awaits this promise, client resolves it
+// by sending CLIENT_SPEECH_DONE over the WebSocket when the utterance ends.
+export const awaitSpeechDone = (sessionId: string, timeoutMs: number): Promise<void> => {
+  return new Promise<void>((resolve) => {
+    const session = globalStore.sessions.get(sessionId);
+    if (!session) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (session.speechDoneResolve) {
+        session.speechDoneResolve = undefined;
+      }
+      resolve();
+    }, timeoutMs);
+    session.speechDoneResolve = () => {
+      clearTimeout(timer);
+      session.speechDoneResolve = undefined;
+      resolve();
+    };
+  });
+};
+
+export const signalSpeechDone = (sessionId: string): void => {
+  const session = globalStore.sessions.get(sessionId);
+  if (session?.speechDoneResolve) {
+    session.speechDoneResolve();
+  }
+};

@@ -7,6 +7,7 @@ import { appConfig } from "../../lib/config";
 import { buildSceneSetup } from "../../lib/prompts";
 import {
   appendSessionTurn,
+  awaitSpeechDone,
   consumePendingInjection,
   getSession,
   markSessionEnded,
@@ -274,51 +275,63 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
         turnTextPreview: turnText.slice(0, 180)
       });
 
-      const segments = splitTextForSpeech(turnText);
-      if (segments.length === 0) {
-        logInfo("orchestrator", "No speakable segments produced for turn", {
-          sessionId,
-          speaker,
-          turnIndex
-        });
-        continue;
-      }
-
-      if (turnIndex === 1 && speaker === "A") {
-        segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
-        logInfo("orchestrator", "Prepended scene setup segment for first turn", {
-          sessionId,
-          speaker,
-          turnIndex
-        });
-      }
-
-      logInfo("orchestrator", "Turn segmented for speech synthesis", {
-        sessionId,
-        speaker,
-        turnIndex,
-        segmentCount: segments.length,
-        segmentLengths: segments.map((segment) => segment.length)
-      });
-
-      for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
-        if (Date.now() >= deadlineMs) {
-          logInfo("orchestrator", "Reached conversation deadline while streaming segments", {
+      if (process.env.BROWSER_TTS_ENABLED === "true") {
+        // Browser Web Speech API path: client speaks the text itself.
+        // Orchestrator waits for CLIENT_SPEECH_DONE signal (with a generous timeout)
+        // so turns remain properly sequenced without any server-side audio synthesis.
+        const wordCount = turnText.trim().split(/\s+/).length;
+        const estimatedMs = (wordCount / 2.5) * 1000 + 5000;
+        const timeoutMs = Math.max(15_000, Math.min(estimatedMs, 75_000));
+        logInfo("orchestrator", "Awaiting client speech done", { sessionId, speaker, turnIndex, wordCount, timeoutMs });
+        await awaitSpeechDone(sessionId, timeoutMs);
+        logInfo("orchestrator", "Client speech done, continuing", { sessionId, speaker, turnIndex });
+      } else {
+        const segments = splitTextForSpeech(turnText);
+        if (segments.length === 0) {
+          logInfo("orchestrator", "No speakable segments produced for turn", {
             sessionId,
             speaker,
-            turnIndex,
-            segmentIndex
+            turnIndex
           });
-          break;
+          continue;
         }
-        await streamSegmentAudio({
+
+        if (turnIndex === 1 && speaker === "A") {
+          segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
+          logInfo("orchestrator", "Prepended scene setup segment for first turn", {
+            sessionId,
+            speaker,
+            turnIndex
+          });
+        }
+
+        logInfo("orchestrator", "Turn segmented for speech synthesis", {
           sessionId,
           speaker,
           turnIndex,
-          segmentIndex,
-          segmentText: segments[segmentIndex],
-          isFinalSegment: segmentIndex === segments.length - 1
+          segmentCount: segments.length,
+          segmentLengths: segments.map((segment) => segment.length)
         });
+
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          if (Date.now() >= deadlineMs) {
+            logInfo("orchestrator", "Reached conversation deadline while streaming segments", {
+              sessionId,
+              speaker,
+              turnIndex,
+              segmentIndex
+            });
+            break;
+          }
+          await streamSegmentAudio({
+            sessionId,
+            speaker,
+            turnIndex,
+            segmentIndex,
+            segmentText: segments[segmentIndex],
+            isFinalSegment: segmentIndex === segments.length - 1
+          });
+        }
       }
     }
 

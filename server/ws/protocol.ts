@@ -50,7 +50,6 @@ export type ServerWsEvent =
       message: string;
     };
 
-export type ClientWsEvent = {
-  type: "USER_INJECT";
-  text: string;
-};
+export type ClientWsEvent =
+  | { type: "USER_INJECT"; text: string }
+  | { type: "CLIENT_SPEECH_DONE" };

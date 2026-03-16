@@ -132,15 +132,20 @@ export default function HomePage() {
   const [transcriptTurns, setTranscriptTurns] = useState<TranscriptTurn[]>([]);
   const [synthesisText, setSynthesisText] = useState("");
   const [synthesisComplete, setSynthesisComplete] = useState(false);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<string[]>([]);
+  const audioQueueRef = useRef<Array<{ url: string; speaker: Speaker }>>([]);
   const activeUrlRef = useRef<string | null>(null);
   const isPlayingRef = useRef(false);
   const volumeRef = useRef(1);
   const sessionEndedRef = useRef(false);
   const segmentBufferRef = useRef<Map<string, Uint8Array[]>>(new Map());
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // Monotonically increasing: each new TURN_TEXT increments this so stale
+  // closures from previous turns cannot signal CLIENT_SPEECH_DONE.
+  const speechGenRef = useRef(0);
 
   useEffect(() => {
     volumeRef.current = volume;
@@ -176,14 +181,19 @@ export default function HomePage() {
       activeUrlRef.current = null;
     }
 
-    for (const url of audioQueueRef.current) {
-      URL.revokeObjectURL(url);
+    for (const item of audioQueueRef.current) {
+      URL.revokeObjectURL(item.url);
     }
     audioQueueRef.current = [];
     segmentBufferRef.current.clear();
     isPlayingRef.current = false;
     sessionEndedRef.current = false;
+    speechGenRef.current++; // invalidate any active speech generation
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
     setIsPaused(false);
+    setIsAudioPlaying(false);
     setNowSpeaking(null);
     setTranscriptTurns([]);
     setSynthesisText("");
@@ -240,8 +250,11 @@ export default function HomePage() {
     }
 
     const audio = audioRef.current;
+    const onPlay = () => setIsAudioPlaying(true);
+    const onPause = () => setIsAudioPlaying(false);
     const onEnded = () => {
       clientLogInfo("Audio element ended playback");
+      setIsAudioPlaying(false);
       isPlayingRef.current = false;
       if (activeUrlRef.current) {
         URL.revokeObjectURL(activeUrlRef.current);
@@ -249,8 +262,12 @@ export default function HomePage() {
       }
       pumpQueue();
     };
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
     return () => {
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
     };
   }, [pumpQueue]);
@@ -260,6 +277,16 @@ export default function HomePage() {
       pumpQueue();
     }
   }, [isPaused, pumpQueue]);
+
+  // Wire pause/resume into Web Speech API
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    if (isPaused) {
+      window.speechSynthesis.pause();
+    } else {
+      window.speechSynthesis.resume();
+    }
+  }, [isPaused]);
 
   useEffect(
     () => () => {
@@ -365,6 +392,80 @@ export default function HomePage() {
           ...prev,
           { speaker: payload.speaker, turnIndex: payload.turnIndex, text: payload.text }
         ]);
+
+        if (typeof window !== "undefined" && window.speechSynthesis) {
+          // Cancel any residual speech from a previous stuck utterance.
+          // Done here (not in SPEAKER_CHANGE) so we never cancel a live utterance
+          // and accidentally trigger onerror → premature CLIENT_SPEECH_DONE.
+          window.speechSynthesis.cancel();
+
+          // Increment generation so any stale closures from the previous turn
+          // cannot fire CLIENT_SPEECH_DONE for this turn.
+          const gen = ++speechGenRef.current;
+
+          // Chrome TTS truncation bug: utterances longer than ~100 chars stop
+          // mid-sentence and fire onend prematurely. Fix: speak one sentence at
+          // a time so each chunk is short enough to complete reliably.
+          const sentences = (payload.text.match(/[^.!?]+[.!?]+/g) ?? [payload.text])
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+          const voices = window.speechSynthesis.getVoices();
+          const voice =
+            payload.speaker === "A"
+              ? (voices.find((v) => /google us english/i.test(v.name)) ??
+                  voices.find((v) => v.lang === "en-US" && /male/i.test(v.name)) ??
+                  voices.find((v) => v.lang === "en-US") ??
+                  null)
+              : (voices.find((v) => /google uk english female/i.test(v.name)) ??
+                  voices.find((v) => v.lang === "en-GB") ??
+                  voices.find((v) => v.lang.startsWith("en") && /female/i.test(v.name)) ??
+                  null);
+          const pitch = payload.speaker === "A" ? 0.88 : 1.12;
+
+          const signalDone = () => {
+            if (speechGenRef.current !== gen) return;
+            setIsAudioPlaying(false);
+            speechUtteranceRef.current = null;
+            const ws = wsRef.current;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+            }
+            finalizeIfEnded();
+          };
+
+          const speakSentence = (index: number) => {
+            if (speechGenRef.current !== gen) return; // stale turn, abort
+            if (index >= sentences.length) {
+              signalDone();
+              return;
+            }
+            const utterance = new SpeechSynthesisUtterance(sentences[index]);
+            utterance.voice = voice;
+            utterance.rate = 1.0;
+            utterance.pitch = pitch;
+            utterance.volume = volumeRef.current;
+
+            utterance.onstart = () => {
+              if (speechGenRef.current === gen) setIsAudioPlaying(true);
+            };
+            utterance.onend = () => {
+              if (speechGenRef.current !== gen) return;
+              speakSentence(index + 1); // advance to next sentence
+            };
+            utterance.onerror = (e) => {
+              if (speechGenRef.current !== gen) return;
+              if (e.error === "canceled") return; // our own cancel() at turn start, ignore
+              clientLogWarn("Speech synthesis error", { error: e.error, sentence: index });
+              signalDone(); // real error: unblock the server
+            };
+
+            speechUtteranceRef.current = utterance;
+            window.speechSynthesis.speak(utterance);
+          };
+
+          speakSentence(0);
+        }
         return;
       }
 
@@ -619,6 +720,7 @@ export default function HomePage() {
             synthesisComplete={synthesisComplete}
             phase={phase}
             audioRef={audioRef}
+            isAudioPlaying={isAudioPlaying}
           />
           <PlayerControls
             canControl={Boolean(sessionId)}
