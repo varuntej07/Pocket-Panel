@@ -147,6 +147,9 @@ export default function HomePage() {
   // Tracks which turns received server-streamed audio (Sonic agent mode).
   // When present, Browser TTS is skipped for that turn.
   const receivedAudioForTurnRef = useRef<Set<number>>(new Set());
+  // Set to true when the server sends the final segment marker for a turn.
+  // Cleared after CLIENT_SPEECH_DONE is sent, signalling playback is complete.
+  const pendingTurnDoneRef = useRef(false);
 
   const scrollToApp = useCallback(() => {
     document.getElementById("app-section")?.scrollIntoView({ behavior: "smooth" });
@@ -184,6 +187,7 @@ export default function HomePage() {
     sessionEndedRef.current = false;
     speechGenRef.current++; // invalidate any active speech generation
     receivedAudioForTurnRef.current.clear();
+    pendingTurnDoneRef.current = false;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -221,6 +225,13 @@ export default function HomePage() {
     const nextUrl = audioQueueRef.current.shift();
     if (!nextUrl) {
       finalizeIfEnded();
+      if (pendingTurnDoneRef.current) {
+        pendingTurnDoneRef.current = false;
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+        }
+      }
       return;
     }
 
@@ -481,6 +492,15 @@ export default function HomePage() {
               speaker: payload.speaker,
               turnIndex: payload.turnIndex
             });
+            // If queue already drained, signal immediately; otherwise defer to pumpQueue.
+            if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+              const ws = wsRef.current;
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "CLIENT_SPEECH_DONE" }));
+              }
+            } else {
+              pendingTurnDoneRef.current = true;
+            }
           }
           return;
         }

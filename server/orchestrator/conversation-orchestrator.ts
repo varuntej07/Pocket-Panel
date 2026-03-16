@@ -4,7 +4,7 @@ import { generateDialogTurn } from "../../lib/bedrock/dialog";
 import { generatePositions } from "../../lib/bedrock/positions";
 import { generateSynthesis } from "../../lib/bedrock/synthesis";
 import { appConfig } from "../../lib/config";
-import { buildSceneSetup, buildSonicAgentSystemPrompt, buildSonicAgentUserPrompt } from "../../lib/prompts";
+import { buildSonicAgentSystemPrompt, buildSonicAgentUserPrompt } from "../../lib/prompts";
 import {
   appendSessionTurn,
   awaitSpeechDone,
@@ -321,7 +321,7 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
 
         // Flush remaining audio
         flushPcmBuffer();
-        // Send final segment marker (empty chunk signals end)
+        // Send final segment marker (empty chunk signals end of this turn's audio)
         sendEvent(sessionId, {
           type: "AUDIO_CHUNK",
           speaker,
@@ -333,6 +333,10 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           isFinalChunk: true,
           isFinalSegment: true
         });
+
+        // Wait for client to finish playing this turn's audio before proceeding.
+        // This prevents Turn B from generating while Turn A is still playing.
+        await awaitSpeechDone(sessionId, 90_000);
 
         const finalText = result.fullText || turnTextAccumulator || "Response generated.";
         appendSessionTurn(sessionId, speaker, turnIndex, finalText);
@@ -352,7 +356,7 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           textPreview: finalText.slice(0, 180)
         });
       } else {
-        // ── Text LLM + TTS path (existing) ──
+        // ── Text LLM + TTS path  ──
         const turnText = await generateDialogTurn(
           {
             topic: activeSession.prompt,
@@ -406,15 +410,6 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
               turnIndex
             });
             continue;
-          }
-
-          if (turnIndex === 1 && speaker === "A") {
-            segments.unshift(buildSceneSetup(activeSession.prompt, activeSession.mode));
-            logInfo("orchestrator", "Prepended scene setup segment for first turn", {
-              sessionId,
-              speaker,
-              turnIndex
-            });
           }
 
           logInfo("orchestrator", "Turn segmented for speech synthesis", {

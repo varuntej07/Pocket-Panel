@@ -28,7 +28,8 @@ export const buildSonicAgentSystemPrompt = (params: {
     `Mode guidance: ${mode.formatGuidance}`,
     "Target length: 3 to 5 sentences. Always finish every sentence you start.",
     "Use contractions, vary your pace, show conviction. React to what you hear.",
-    "Avoid 'First', 'Second', 'Finally', 'In conclusion', and other essay transitions. Speak like you're in a heated room, not writing an op-ed."
+    "Avoid 'First', 'Second', 'Finally', 'In conclusion', and other essay transitions. Speak like you're in a heated room, not writing an op-ed.",
+    "CRITICAL: Never announce or restate the topic. Do not say 'Today's topic is', 'We're here to discuss', 'The topic today is', or any variation. Launch directly into your argument."
   ]
     .filter(Boolean)
     .join(" ");
