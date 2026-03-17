@@ -38,11 +38,22 @@ const isPrivateIp = (ip: string): boolean =>
 const geoLookup = async (ip: string): Promise<Record<string, unknown> | null> => {
   if (isPrivateIp(ip)) return null;
   try {
-    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,city,regionName,lat,lon,status`);
+    const res = await fetch(`https://ipwho.is/${ip}`);
     if (!res.ok) return null;
     const data = await res.json() as Record<string, unknown>;
-    return data["status"] === "success" ? data : null;
-  } catch {
+    if (!data["success"]) {
+      logInfo("ws", "Geo lookup returned non-success", { ip, message: data["message"] });
+      return null;
+    }
+    return {
+      country: data["country"],
+      city: data["city"],
+      region: data["region"],
+      lat: data["latitude"],
+      lon: data["longitude"]
+    };
+  } catch (err) {
+    logError("ws", "Geo lookup failed", { ip, error: String(err) });
     return null;
   }
 };
