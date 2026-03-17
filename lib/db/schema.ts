@@ -12,6 +12,8 @@ export const sessions = pgTable("sessions", {
   modeCategory: varchar("mode_category", { length: 32 }).notNull(),
   status: varchar("status", { length: 16 }).notNull().default("created"),
   totalTurns: integer("total_turns").notNull().default(0),
+  ipAddress: varchar("ip_address", { length: 64 }),
+  location: jsonb("location"),
   endedReason: varchar("ended_reason", { length: 64 }),
   lastError: text("last_error"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),

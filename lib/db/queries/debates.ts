@@ -16,6 +16,7 @@ export const upsertSession = async (session: SessionState): Promise<void> => {
       modeCategory: session.mode.category,
       status: session.status,
       totalTurns: session.turns.length,
+      ipAddress: session.ipAddress ?? null,
       createdAt: new Date(session.createdAt),
       updatedAt: new Date(session.updatedAt)
     })
@@ -52,5 +53,24 @@ export const updateSessionTurns = async (sessionId: string, totalTurns: number):
   await db
     .update(sessions)
     .set({ totalTurns, updatedAt: new Date() })
+    .where(eq(sessions.id, sessionId));
+};
+
+export const updateSessionIp = async (sessionId: string, ipAddress: string): Promise<void> => {
+  if (!db) return;
+  await db
+    .update(sessions)
+    .set({ ipAddress, updatedAt: new Date() })
+    .where(eq(sessions.id, sessionId));
+};
+
+export const updateSessionLocation = async (
+  sessionId: string,
+  location: Record<string, unknown>
+): Promise<void> => {
+  if (!db) return;
+  await db
+    .update(sessions)
+    .set({ location, updatedAt: new Date() })
     .where(eq(sessions.id, sessionId));
 };

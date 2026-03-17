@@ -1405,6 +1405,76 @@ body {
   border-color: var(--accent);
 }
 
+/* Tab bar — Summary / Full Conversation toggle */
+.tabBar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.9rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.tabBtn {
+  flex: 1;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tabBtn:not(:last-child) {
+  border-right: 1px solid var(--border);
+}
+
+.tabBtn:hover:not(.tabBtn--active) {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
+.tabBtn--active {
+  background: rgba(46, 196, 182, 0.12);
+  color: var(--accent);
+}
+
+/* Summary / synthesis text */
+.synthesisBody {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--text);
+  font-family: var(--font-prose), serif;
+  white-space: pre-wrap;
+}
+
+.synthesisCursor {
+  display: inline-block;
+  animation: blink 0.8s step-start infinite;
+  color: var(--accent);
+  margin-left: 2px;
+}
+
+.synthesisLoading {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.synthesisDots {
+  animation: blink 1s step-start infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
 /* ─────────────────────────────────────────────
    LOADING BARS (replaces spinner)
 ───────────────────────────────────────────── */

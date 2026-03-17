@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { appConfig } from "./config";
-import { updateSessionStatus, updateSessionTurns, upsertSession } from "./db/queries/debates";
+import { updateSessionIp, updateSessionStatus, updateSessionTurns, upsertSession } from "./db/queries/debates";
 import { logEvent } from "./db/queries/events";
 import { insertTurn } from "./db/queries/turns";
 import { upsertTranscript } from "./db/queries/transcripts";
@@ -67,6 +67,14 @@ export const setSessionSocket = (sessionId: string, socket: SessionState["socket
   }
   session.socket = socket;
   touch(session);
+};
+
+export const setSessionIp = (sessionId: string, ipAddress: string): void => {
+  const session = globalStore.sessions.get(sessionId);
+  if (!session) return;
+  session.ipAddress = ipAddress;
+  touch(session);
+  void updateSessionIp(sessionId, ipAddress).catch((err) => logError("session-store", "updateSessionIp failed", { sessionId, error: String(err) }));
 };
 
 export const clearSessionSocket = (sessionId: string): void => {

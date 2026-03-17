@@ -2,7 +2,9 @@ import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Socket } from "node:net";
 import { URL } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { clearSessionSocket, getSession, markSessionEnded, setPendingInjection, setSessionSocket, signalSpeechDone } from "../../lib/session-store";
+import { logEvent } from "../../lib/db/queries/events";
+import { updateSessionLocation } from "../../lib/db/queries/debates";
+import { clearSessionSocket, getSession, markSessionEnded, setPendingInjection, setSessionIp, setSessionSocket, signalSpeechDone } from "../../lib/session-store";
 import { logError, logInfo } from "../../lib/telemetry";
 import { startConversationIfNeeded } from "../orchestrator/conversation-orchestrator";
 import type { ServerWsEvent } from "./protocol";
@@ -17,6 +19,32 @@ const getSessionIdFromRequest = (request: IncomingMessage): string | null => {
   const host = request.headers.host ?? "localhost";
   const requestUrl = new URL(request.url ?? "/", `http://${host}`);
   return requestUrl.searchParams.get(SESSION_ID_PARAM);
+};
+
+const getClientIp = (request: IncomingMessage): string => {
+  const forwarded = request.headers["x-forwarded-for"];
+  if (forwarded) {
+    const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    return raw.split(",")[0].trim();
+  }
+  return request.socket.remoteAddress ?? "unknown";
+};
+
+const PRIVATE_IP_PREFIXES = ["127.", "10.", "192.168.", "::1", "::ffff:127.", "unknown"];
+const isPrivateIp = (ip: string): boolean =>
+  PRIVATE_IP_PREFIXES.some((prefix) => ip.startsWith(prefix)) ||
+  /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+
+const geoLookup = async (ip: string): Promise<Record<string, unknown> | null> => {
+  if (isPrivateIp(ip)) return null;
+  try {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,city,regionName,lat,lon,status`);
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, unknown>;
+    return data["status"] === "success" ? data : null;
+  } catch {
+    return null;
+  }
 };
 
 export const attachWebSocketServer = (server: HttpServer): void => {
@@ -58,8 +86,21 @@ export const attachWebSocketServer = (server: HttpServer): void => {
       return;
     }
 
+    const clientIp = getClientIp(request);
     setSessionSocket(sessionId, ws);
-    logInfo("ws", "Client connected", { sessionId });
+    setSessionIp(sessionId, clientIp);
+    logInfo("ws", "Client connected", { sessionId, clientIp });
+
+    void logEvent({ sessionId, eventType: "ws_connected", metadata: { session_id: sessionId }, ipAddress: clientIp }).catch(() => {});
+
+    // Fire-and-forget geo lookup — never blocks WS pipeline
+    void geoLookup(clientIp)
+      .then((location) => {
+        if (location) {
+          void updateSessionLocation(sessionId, location).catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     ws.on("close", (code: number, reasonBuffer: Buffer) => {
       clearSessionSocket(sessionId);
@@ -67,11 +108,9 @@ export const attachWebSocketServer = (server: HttpServer): void => {
       if (current && (current.status === "created" || current.status === "running")) {
         markSessionEnded(sessionId, "closed");
       }
-      logInfo("ws", "Client disconnected", {
-        sessionId,
-        code,
-        reason: reasonBuffer.toString("utf-8")
-      });
+      const reason = reasonBuffer.toString("utf-8");
+      logInfo("ws", "Client disconnected", { sessionId, code, reason });
+      void logEvent({ sessionId, eventType: "ws_disconnected", metadata: { close_code: code, reason }, ipAddress: clientIp }).catch(() => {});
     });
 
     ws.on("message", (data) => {

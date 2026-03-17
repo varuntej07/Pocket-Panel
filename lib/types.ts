@@ -32,6 +32,7 @@ export interface SessionState {
   updatedAt: number;
   turns: SessionTurn[];
   started: boolean;
+  ipAddress?: string;
   endedReason?: string;
   lastError?: string;
   pendingInjection?: string;

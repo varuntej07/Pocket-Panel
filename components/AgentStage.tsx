@@ -36,17 +36,22 @@ const WAITING_CAPTIONS = [
   "Loading a rebuttal…",
 ];
 
+type EndedTab = "summary" | "transcript";
+
 export function AgentStage({
   nowSpeaking,
   topicBreadcrumb,
   modeTitle,
   transcriptTurns,
+  synthesisText,
+  synthesisComplete,
   phase,
   isAudioPlaying,
 }: AgentStageProps) {
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(true);
   const [captionIndex, setCaptionIndex] = useState(0);
+  const [activeTab, setActiveTab] = useState<EndedTab>("summary");
 
   useEffect(() => {
     if (transcriptOpen) {
@@ -63,6 +68,13 @@ export function AgentStage({
     }, 2500);
     return () => clearInterval(id);
   }, [showCaptions]);
+
+  // Switch to transcript tab if synthesis never arrives
+  useEffect(() => {
+    if (phase === "ended" && synthesisComplete && synthesisText.length === 0) {
+      setActiveTab("transcript");
+    }
+  }, [phase, synthesisComplete, synthesisText.length]);
 
   const agentTurns = transcriptTurns.filter((t) => t.speaker !== "moderator");
   const currentTurn = agentTurns.length;
@@ -120,7 +132,7 @@ export function AgentStage({
         </div>
       )}
 
-      {/* Live Transcript (hidden once ended — full transcript shown below) */}
+      {/* Live Transcript (hidden once ended) */}
       {transcriptTurns.length > 0 && !isEnded && (
         <div className="transcriptPanel">
           <div className="transcriptHeaderRow">
@@ -153,14 +165,42 @@ export function AgentStage({
         </div>
       )}
 
-      {/* Full Conversation Transcript — shown at the end */}
-      {isEnded && transcriptTurns.length > 0 && (
+      {/* Post-session: tab toggle between Summary and Full Conversation */}
+      {isEnded && (
         <div className="transcriptPanel">
-          <h3 className="transcriptHeading">Full Conversation Transcript</h3>
-          <div className="transcriptScroll">
-            {transcriptTurns
-              .filter((turn) => turn.speaker !== "moderator")
-              .map((turn) => (
+          <div className="tabBar">
+            <button
+              type="button"
+              className={`tabBtn ${activeTab === "summary" ? "tabBtn--active" : ""}`}
+              onClick={() => setActiveTab("summary")}
+            >
+              Summary
+            </button>
+            <button
+              type="button"
+              className={`tabBtn ${activeTab === "transcript" ? "tabBtn--active" : ""}`}
+              onClick={() => setActiveTab("transcript")}
+            >
+              Full Conversation
+            </button>
+          </div>
+
+          {activeTab === "summary" && (
+            <div className="transcriptScroll">
+              {synthesisText.length === 0 && !synthesisComplete ? (
+                <p className="synthesisLoading">Generating summary<span className="synthesisDots">…</span></p>
+              ) : (
+                <p className="synthesisBody">
+                  {synthesisText}
+                  {!synthesisComplete && <span className="synthesisCursor">▍</span>}
+                </p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "transcript" && (
+            <div className="transcriptScroll">
+              {agentTurns.map((turn) => (
                 <div
                   key={`${turn.turnIndex}-${turn.speaker}`}
                   className={`transcriptTurn transcriptTurn--${turn.speaker.toLowerCase()}`}
@@ -169,7 +209,8 @@ export function AgentStage({
                   <p className="transcriptText">{turn.text}</p>
                 </div>
               ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </section>
