@@ -4,14 +4,19 @@ import { resolveBedrockModelId } from "./model-id";
 import { appConfig } from "../config";
 import { withRetry, withTimeout } from "../retry";
 import { logError, logInfo } from "../telemetry";
-import type { ModeSuggestion } from "../types";
+import type { BedrockUsage, ModeSuggestion } from "../types";
 
 export interface AgentPositions {
   positionA: string;
   positionB: string;
 }
 
-export const generatePositions = async (topic: string, mode: ModeSuggestion): Promise<AgentPositions> => {
+export interface GeneratePositionsResult {
+  positions: AgentPositions;
+  usage: BedrockUsage;
+}
+
+export const generatePositions = async (topic: string, mode: ModeSuggestion): Promise<GeneratePositionsResult> => {
   const defaultPositions: AgentPositions = {
     positionA: `Agent A argues strongly in favor of the primary position on "${topic}".`,
     positionB: `Agent B argues strongly against it with a sharp opposing stance.`
@@ -26,7 +31,7 @@ export const generatePositions = async (topic: string, mode: ModeSuggestion): Pr
 
   if (!modelId) {
     logInfo("positions", "No model configured; using default positions");
-    return defaultPositions;
+    return { positions: defaultPositions, usage: { inputTokens: 0, outputTokens: 0 } };
   }
 
   const bedrock = getBedrockClient();
@@ -60,7 +65,12 @@ export const generatePositions = async (topic: string, mode: ModeSuggestion): Pr
         jitterRatio: appConfig.conversation.bedrockRetryJitterRatio
       },
       "generatePositions"
-    )) as { output?: { message?: { content?: Array<Record<string, unknown>> } } };
+    )) as { output?: { message?: { content?: Array<Record<string, unknown>> } }; usage?: { inputTokens?: number; outputTokens?: number } };
+
+    const usage: BedrockUsage = {
+      inputTokens: response.usage?.inputTokens ?? 0,
+      outputTokens: response.usage?.outputTokens ?? 0
+    };
 
     const rawText = (response.output?.message?.content ?? [])
       .map((block: Record<string, unknown>) => (block as { text?: string }).text ?? "")
@@ -75,18 +85,18 @@ export const generatePositions = async (topic: string, mode: ModeSuggestion): Pr
       .filter(Boolean);
 
     if (lines.length >= 2) {
-      return { positionA: lines[0], positionB: lines[1] };
+      return { positions: { positionA: lines[0], positionB: lines[1] }, usage };
     }
 
     const aMatch = rawText.match(/Agent A[^.!?]*[.!?]/i);
     const bMatch = rawText.match(/Agent B[^.!?]*[.!?]/i);
     if (aMatch && bMatch) {
-      return { positionA: aMatch[0], positionB: bMatch[0] };
+      return { positions: { positionA: aMatch[0], positionB: bMatch[0] }, usage };
     }
 
-    return defaultPositions;
+    return { positions: defaultPositions, usage };
   } catch (error) {
     logError("positions", "Failed to generate positions; using defaults", { error: String(error) });
-    return defaultPositions;
+    return { positions: defaultPositions, usage: { inputTokens: 0, outputTokens: 0 } };
   }
 };

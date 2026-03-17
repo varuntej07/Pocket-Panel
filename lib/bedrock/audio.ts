@@ -1607,6 +1607,11 @@ export interface SonicAgentParams {
 export interface SonicAgentResult {
   fullText: string;
   totalAudioBytes: number;
+  usage: {
+    totalTokens: number;
+    speechInputTokens: number;
+    speechOutputTokens: number;
+  };
 }
 
 const buildSonicAgentRequestEvents = (
@@ -1881,6 +1886,9 @@ export const invokeSonicAsAgent = async (
         let fullText = "";
         let streamEventCount = 0;
         let audioOutputEventCount = 0;
+        let sonicTotalTokens = 0;
+        let sonicSpeechInputTokens = 0;
+        let sonicSpeechOutputTokens = 0;
 
         for await (const streamEvent of response.body ?? []) {
           streamEventCount += 1;
@@ -1931,6 +1939,14 @@ export const invokeSonicAsAgent = async (
           if (eventName === "completionEnd") {
             completionSignal.done = true;
           }
+
+          // Extract usage tokens from usageEvent
+          const usageTotalTokens = getByPath(payload, "event.usageEvent.totalTokens");
+          const usageInputSpeech = getByPath(payload, "event.usageEvent.details.total.input.speechTokens");
+          const usageOutputSpeech = getByPath(payload, "event.usageEvent.details.total.output.speechTokens");
+          if (typeof usageTotalTokens === "number") sonicTotalTokens = usageTotalTokens;
+          if (typeof usageInputSpeech === "number") sonicSpeechInputTokens = usageInputSpeech;
+          if (typeof usageOutputSpeech === "number") sonicSpeechOutputTokens = usageOutputSpeech;
         }
 
         logInfo("audio", "Nova Sonic agent stream completed", {
@@ -1940,10 +1956,21 @@ export const invokeSonicAsAgent = async (
           audioOutputEventCount,
           totalAudioBytes,
           textLength: fullText.length,
-          textPreview: toPreviewText(fullText)
+          textPreview: toPreviewText(fullText),
+          sonicTotalTokens,
+          sonicSpeechInputTokens,
+          sonicSpeechOutputTokens
         });
 
-        return { fullText, totalAudioBytes };
+        return {
+          fullText,
+          totalAudioBytes,
+          usage: {
+            totalTokens: sonicTotalTokens,
+            speechInputTokens: sonicSpeechInputTokens,
+            speechOutputTokens: sonicSpeechOutputTokens
+          }
+        };
       })(),
       appConfig.conversation.bedrockTimeoutMs,
       "sonicAgentRead"

@@ -1,4 +1,9 @@
 export type ConversationIntent = "debate" | "argument" | "teaching" | "podcast" | "none";
+
+export interface BedrockUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 export type Speaker = "A" | "B";
 
 export interface ModeSuggestion {

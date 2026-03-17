@@ -5,7 +5,7 @@ import { appConfig } from "../config";
 import { buildDialogSystemPrompt, buildDialogUserPrompt } from "../prompts";
 import { withRetry, withTimeout } from "../retry";
 import { logError, logInfo, toErrorMetadata } from "../telemetry";
-import type { ModeSuggestion, SessionTurn, Speaker } from "../types";
+import type { BedrockUsage, ModeSuggestion, SessionTurn, Speaker } from "../types";
 import { searchWeb, type BraveResult } from "../brave-search";
 
 interface GenerateDialogTurnParams {
@@ -27,6 +27,16 @@ const fallbackUtterance = (params: GenerateDialogTurnParams): string => {
   const prefix = speaker === "A" ? "Agent A view" : "Agent B response";
   return `${prefix} on ${topic}: this ${mode.category} turn ${turnIndex} keeps the argument focused, concrete, and easy to follow by audio.`;
 };
+
+const zeroUsage: BedrockUsage = { inputTokens: 0, outputTokens: 0 };
+const extractUsage = (response: ConverseResponse): BedrockUsage => ({
+  inputTokens: response.usage?.inputTokens ?? 0,
+  outputTokens: response.usage?.outputTokens ?? 0
+});
+const sumUsage = (a: BedrockUsage, b: BedrockUsage): BedrockUsage => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens
+});
 
 const searchWebToolConfig = {
   tools: [
@@ -57,7 +67,17 @@ type ConverseResponse = {
       content?: Array<Record<string, unknown>>;
     };
   };
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+  };
 };
+
+export interface DialogTurnResult {
+  text: string;
+  usage: BedrockUsage;
+  searchCallCount: number;
+}
 
 const extractText = (contentBlocks: Array<Record<string, unknown>>): string =>
   contentBlocks
@@ -73,7 +93,7 @@ const extractText = (contentBlocks: Array<Record<string, unknown>>): string =>
 export const generateDialogTurn = async (
   params: GenerateDialogTurnParams,
   onToolEvent?: ToolEventCallback
-): Promise<string> => {
+): Promise<DialogTurnResult> => {
   const modelId = resolveBedrockModelId({
     configuredModelId: appConfig.models.dialog,
     explicitInferenceProfileId: appConfig.models.dialogInferenceProfile,
@@ -83,7 +103,7 @@ export const generateDialogTurn = async (
 
   if (!modelId) {
     logInfo("dialog", "BEDROCK_MODEL_ID_DIALOG/BEDROCK_INFERENCE_PROFILE_ID_DIALOG missing, using fallback utterance");
-    return fallbackUtterance(params);
+    return { text: fallbackUtterance(params), usage: zeroUsage, searchCallCount: 0 };
   }
 
   const bedrock = getBedrockClient();
@@ -185,22 +205,20 @@ export const generateDialogTurn = async (
         )) as ConverseResponse;
 
         const text = extractText(secondResponse.output?.message?.content ?? []);
-        return text || fallbackUtterance(params);
+        const usage = sumUsage(extractUsage(firstResponse), extractUsage(secondResponse));
+        return { text: text || fallbackUtterance(params), usage, searchCallCount: 1 };
       }
     }
 
     // Normal path — extract text from the first (and only) response
     const text = extractText(firstContentBlocks);
-    if (!text) {
-      return fallbackUtterance(params);
-    }
-    return text;
+    return { text: text || fallbackUtterance(params), usage: extractUsage(firstResponse), searchCallCount: 0 };
   } catch (error) {
     logError("dialog", "Bedrock dialog generation failed; using fallback utterance", {
       modelId,
       ...toErrorMetadata(error),
       turnIndex: params.turnIndex
     });
-    return fallbackUtterance(params);
+    return { text: fallbackUtterance(params), usage: zeroUsage, searchCallCount: 0 };
   }
 };

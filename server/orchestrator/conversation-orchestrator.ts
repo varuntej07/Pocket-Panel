@@ -3,6 +3,7 @@ import { encodePcm16LeToWav, invokeSonicAsAgent, synthesizeSpeechAudio } from ".
 import { generateDialogTurn } from "../../lib/bedrock/dialog";
 import { generatePositions } from "../../lib/bedrock/positions";
 import { generateSynthesis } from "../../lib/bedrock/synthesis";
+import type { BedrockUsage } from "../../lib/types";
 import { appConfig } from "../../lib/config";
 import { logEvent } from "../../lib/db/queries/events";
 import { updateSynthesisText } from "../../lib/db/queries/transcripts";
@@ -133,7 +134,11 @@ const streamSegmentAudio = async (params: {
   }
 };
 
-const streamSynthesisWithCapture = async (sessionId: string, onText?: (chunk: string) => void): Promise<void> => {
+const streamSynthesisWithCapture = async (
+  sessionId: string,
+  onText?: (chunk: string) => void,
+  onUsage?: (usage: BedrockUsage) => void
+): Promise<void> => {
   const session = getSession(sessionId);
   if (!session) {
     return;
@@ -148,7 +153,7 @@ const streamSynthesisWithCapture = async (sessionId: string, onText?: (chunk: st
 
   try {
     let hasChunks = false;
-    for await (const chunk of generateSynthesis(session.prompt, session.mode, session.turns)) {
+    for await (const chunk of generateSynthesis(session.prompt, session.mode, session.turns, onUsage)) {
       hasChunks = true;
       onText?.(chunk);
       trySendEvent(sessionId, {
@@ -189,9 +194,25 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
     modeId: session.mode.id
   });
 
+  // Accumulate token usage across the entire session
+  const sessionUsage = {
+    novaProInputTokens: 0,
+    novaProOutputTokens: 0,
+    sonicTotalTokens: 0,
+    sonicSpeechInputTokens: 0,
+    sonicSpeechOutputTokens: 0,
+    braveSearchCalls: 0
+  };
+
+  const addNovaProUsage = (usage: BedrockUsage) => {
+    sessionUsage.novaProInputTokens += usage.inputTokens;
+    sessionUsage.novaProOutputTokens += usage.outputTokens;
+  };
+
   try {
     // Pre-generate agent positions for consistent, opposed stances
-    const positions = await generatePositions(session.prompt, session.mode);
+    const { positions, usage: positionsUsage } = await generatePositions(session.prompt, session.mode);
+    addNovaProUsage(positionsUsage);
     logInfo("orchestrator", "Agent positions assigned", {
       sessionId,
       positionA: positions.positionA,
@@ -341,7 +362,10 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
         await awaitSpeechDone(sessionId, 90_000);
 
         const finalText = result.fullText || turnTextAccumulator || "Response generated.";
-        appendSessionTurn(sessionId, speaker, turnIndex, finalText);
+        sessionUsage.sonicTotalTokens += result.usage.totalTokens;
+        sessionUsage.sonicSpeechInputTokens += result.usage.speechInputTokens;
+        sessionUsage.sonicSpeechOutputTokens += result.usage.speechOutputTokens;
+        appendSessionTurn(sessionId, speaker, turnIndex, finalText, result.usage.totalTokens || undefined, undefined);
         sendEvent(sessionId, {
           type: "TURN_TEXT",
           speaker,
@@ -355,13 +379,16 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           turnIndex,
           textLength: finalText.length,
           totalAudioBytes: result.totalAudioBytes,
+          sonicTotalTokens: result.usage.totalTokens,
+          sonicSpeechInputTokens: result.usage.speechInputTokens,
+          sonicSpeechOutputTokens: result.usage.speechOutputTokens,
           textPreview: finalText.slice(0, 180)
         });
 
-        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: finalText.length, audio_bytes: result.totalAudioBytes, voice_id: voiceId, mode: "sonic_agent" } }).catch(() => {});
+        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: finalText.length, audio_bytes: result.totalAudioBytes, voice_id: voiceId, mode: "sonic_agent", sonic_total_tokens: result.usage.totalTokens, sonic_speech_input_tokens: result.usage.speechInputTokens, sonic_speech_output_tokens: result.usage.speechOutputTokens } }).catch(() => {});
       } else {
         // ── Text LLM + TTS path  ──
-        const turnText = await generateDialogTurn(
+        const dialogResult = await generateDialogTurn(
           {
             topic: activeSession.prompt,
             mode: activeSession.mode,
@@ -379,8 +406,11 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
             }
           }
         );
+        const { text: turnText, usage: dialogUsage, searchCallCount } = dialogResult;
+        addNovaProUsage(dialogUsage);
+        sessionUsage.braveSearchCalls += searchCallCount;
 
-        appendSessionTurn(sessionId, speaker, turnIndex, turnText);
+        appendSessionTurn(sessionId, speaker, turnIndex, turnText, dialogUsage.inputTokens || undefined, dialogUsage.outputTokens || undefined);
 
         // Emit transcript text before audio so UI can show it immediately
         sendEvent(sessionId, {
@@ -395,10 +425,13 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           speaker,
           turnIndex,
           turnTextLength: turnText.length,
+          inputTokens: dialogUsage.inputTokens,
+          outputTokens: dialogUsage.outputTokens,
+          searchCallCount,
           turnTextPreview: turnText.slice(0, 180)
         });
 
-        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: turnText.length, mode: process.env.BROWSER_TTS_ENABLED === "true" ? "browser_tts" : "server_tts" } }).catch(() => {});
+        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: turnText.length, mode: process.env.BROWSER_TTS_ENABLED === "true" ? "browser_tts" : "server_tts", input_tokens: dialogUsage.inputTokens, output_tokens: dialogUsage.outputTokens, search_call_count: searchCallCount } }).catch(() => {});
 
         if (process.env.BROWSER_TTS_ENABLED === "true") {
           const wordCount = turnText.trim().split(/\s+/).length;
@@ -467,11 +500,30 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
     // Stream post-debate synthesis after SESSION_END
     const synthesisStart = Date.now();
     let synthesisText = "";
-    await streamSynthesisWithCapture(sessionId, (text) => { synthesisText += text; });
+    await streamSynthesisWithCapture(sessionId, (text) => { synthesisText += text; }, addNovaProUsage);
     if (synthesisText) {
       void updateSynthesisText(sessionId, synthesisText).catch(() => {});
       void logEvent({ sessionId: sessionId, eventType: "synthesis_completed", metadata: { synthesis_length: synthesisText.length, duration_ms: Date.now() - synthesisStart } }).catch(() => {});
     }
+
+    // Log cumulative token usage and estimated cost for this session
+    const novaProInputCost = (sessionUsage.novaProInputTokens / 1_000_000) * 0.80;
+    const novaProOutputCost = (sessionUsage.novaProOutputTokens / 1_000_000) * 3.20;
+    const estimatedUsd = novaProInputCost + novaProOutputCost; // Nova Sonic pricing TBD
+    void logEvent({
+      sessionId: sessionId,
+      eventType: "usage_summary",
+      metadata: {
+        nova_pro_input_tokens: sessionUsage.novaProInputTokens,
+        nova_pro_output_tokens: sessionUsage.novaProOutputTokens,
+        sonic_total_tokens: sessionUsage.sonicTotalTokens,
+        sonic_speech_input_tokens: sessionUsage.sonicSpeechInputTokens,
+        sonic_speech_output_tokens: sessionUsage.sonicSpeechOutputTokens,
+        brave_search_calls: sessionUsage.braveSearchCalls,
+        estimated_usd: Math.round(estimatedUsd * 100000) / 100000,
+        pricing_note: "Nova Sonic pricing TBD; Nova Pro $0.80/$3.20 per 1M in/out"
+      }
+    }).catch(() => {});
   } catch (error) {
     const baseMessage = error instanceof Error ? error.message : String(error);
     const causeMessage = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;

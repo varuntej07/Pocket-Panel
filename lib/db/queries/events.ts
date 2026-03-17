@@ -15,7 +15,8 @@ export type EventType =
   | "safety_refusal"
   | "ws_connected"
   | "ws_disconnected"
-  | "sonic_agent_invoked";
+  | "sonic_agent_invoked"
+  | "usage_summary";
 
 export const logEvent = async (params: {
   sessionId?: string;

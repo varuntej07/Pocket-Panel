@@ -100,7 +100,14 @@ export const classifyIntentWithTools = async (prompt: string): Promise<IntentCla
           content?: Array<Record<string, unknown>>;
         };
       };
+      usage?: { inputTokens?: number; outputTokens?: number };
     };
+
+    logInfo("classifier", "Bedrock classify token usage", {
+      modelId,
+      inputTokens: response.usage?.inputTokens ?? 0,
+      outputTokens: response.usage?.outputTokens ?? 0
+    });
 
     const contentBlocks = response.output?.message?.content ?? [];
     const toolUseBlock = contentBlocks.find(

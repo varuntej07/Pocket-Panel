@@ -131,7 +131,9 @@ export const appendSessionTurn = (
   sessionId: string,
   speaker: Speaker,
   turnIndex: number,
-  text: string
+  text: string,
+  inputTokens?: number,
+  outputTokens?: number
 ): SessionTurn | undefined => {
   const session = globalStore.sessions.get(sessionId);
   if (!session) {
@@ -146,7 +148,7 @@ export const appendSessionTurn = (
   session.turns.push(turn);
   touch(session);
 
-  void insertTurn({ sessionId, speaker, text, turnIndex }).catch((err) => logError("session-store", "insertTurn failed", { sessionId, error: String(err) }));
+  void insertTurn({ sessionId, speaker, text, turnIndex, inputTokens, outputTokens }).catch((err) => logError("session-store", "insertTurn failed", { sessionId, error: String(err) }));
   void updateSessionTurns(sessionId, session.turns.length).catch((err) => logError("session-store", "updateSessionTurns failed", { sessionId, error: String(err) }));
 
   return turn;

@@ -4,12 +4,13 @@ import { resolveBedrockModelId } from "./model-id";
 import { appConfig } from "../config";
 import { buildSynthesisPrompt } from "../prompts";
 import { logError, logInfo } from "../telemetry";
-import type { ModeSuggestion, SessionTurn } from "../types";
+import type { BedrockUsage, ModeSuggestion, SessionTurn } from "../types";
 
 export async function* generateSynthesis(
   topic: string,
   mode: ModeSuggestion,
-  turns: SessionTurn[]
+  turns: SessionTurn[],
+  onUsage?: (usage: BedrockUsage) => void
 ): AsyncGenerator<string> {
   const modelId = resolveBedrockModelId({
     configuredModelId: appConfig.models.dialog,
@@ -44,6 +45,12 @@ export async function* generateSynthesis(
       const delta = event.contentBlockDelta?.delta?.text;
       if (typeof delta === "string" && delta.length > 0) {
         yield delta;
+      }
+      if (event.metadata?.usage && onUsage) {
+        onUsage({
+          inputTokens: event.metadata.usage.inputTokens ?? 0,
+          outputTokens: event.metadata.usage.outputTokens ?? 0
+        });
       }
     }
 
