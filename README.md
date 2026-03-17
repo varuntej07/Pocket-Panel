@@ -1,183 +1,147 @@
 # PocketPanel
 
-PocketPanel is a real-time AI debate platform built on Amazon Nova. Two AI agents take opposing positions on any topic and argue it out live with natural, expressive voice — streamed directly to your browser over WebSocket.
+Two AI agents. One topic. They argue. You listen.
 
-Enter a topic. Pick a format. Listen to two minds clash.
+PocketPanel runs a live voice conversation between two AI agents on any topic you give it. Pick a subject — climate policy, whether remote work killed company culture, pineapple on pizza — and listen two Nova Sonic agents take opposing sides and go at it in real-time. Both speech and text are generated simultaneously, with natural rhythm, emphasis, and conviction. It sounds like two people who actually disagree, not two scripts being narrated.
 
-## How It Works
+You can throw a question in mid-debate. The next agent addresses it and keeps arguing. Brave Search grounds the agents on live sources when the topic needs real facts. Once the debate ends, a post-debate analysis breaks down what each side got right.
 
-1. **You type a topic** — "Should cities ban cars from downtown?"
-2. **Nova Lite classifies intent** — debate, argument, teaching, or podcast — and recommends a conversation format from 35 modes.
-3. **The session auto-starts.** Two agents are assigned opposing positions.
-4. **Nova Sonic generates each turn** — the agent thinks, speaks, and reacts in real-time. Text and audio stream simultaneously over WebSocket.
-5. **After the final turn**, Nova Pro produces a structured post-debate synthesis: each side's core position, strongest argument, logical verdict, and follow-up questions.
+Built for anyone with dead time and a question worth hearing from both sides.
+
+---
+
+## How it uses Amazon Nova
+
+PocketPanel is built around three Nova models working in concert:
+
+**Nova Lite** classifies your topic and assigns a debate format — structured debate, rapid crossfire, podcast, or explainer. It's fast and cheap, used purely for intent routing before anything expensive runs.
+
+**Nova Sonic** (`nova-2-sonic-v1:0`) is the core of the whole thing. Two instances run per debate, each holding an opposing position. They don't read pre-written text — they generate their own arguments, word by word, with audio and text streaming out simultaneously over a bidirectional WebSocket. This is Nova Sonic operating as a conversational agent, not as a text-to-speech engine.
+
+**Nova Pro** synthesizes a structured post-debate analysis once the session ends: each side's core position, their strongest argument, what they missed, and follow-up questions worth exploring.
+
+---
 
 ## Architecture
 
+PocketPanel runs Nova Sonic as a conversational agent. When you enter a topic, the server runs three things before the first word is spoken: Nova Lite classifies the intent and picks a conversation format, Nova Pro generates two sharply opposed position stances for Agent A and Agent B, and (if enabled) Brave Search pulls live sources to ground the agents on real facts.
+
+Then the turn loop starts. Agent A goes first. The orchestrator builds a system prompt carrying A's assigned position, the debate format rules, and voice guidance, then opens a bidirectional WebSocket session to Nova Sonic. The opponent's last argument (or the opening topic on turn 1) is sent as the user input, along with silence audio frames that initialize Sonic's audio pipeline. Sonic generates its own response — the words, the pacing, the conviction — streaming back interleaved `audioOutput` and `textOutput` events as it goes. On the server, PCM chunks off that stream get buffered into ~100ms WAV segments, wrapped with a WAV header, and pushed over the browser WebSocket as base64. The `completionEnd` event signals Sonic is done, the session closes, and the `textOutput` from this turn becomes the user input for the next.
+
+Agent B's turn opens a fresh Sonic session with B's position and A's just-spoken argument. Same flow. The sessions alternate — A, B, A, B — each one stateless and independent, each one picking up exactly where the last left off via the accumulated transcript. Once all turns complete, Nova Pro streams a post-debate synthesis to the browser.
+
+On the client, the Web Audio API's `AudioContext` schedules each incoming WAV chunk against the hardware clock. All `decodeAudioData` calls are serialized through a promise chain so chunks play in strict order with no gaps.
+
 ```
-Browser (Next.js)          Custom Node Server
-  |                           |
-  |  POST /api/classify  -->  Nova Lite (intent + mode selection)
-  |  POST /api/start     -->  Creates session, returns WS URL
-  |                           |
-  |  WebSocket /ws  <-------> Orchestrator turn loop
-  |    SPEAKER_CHANGE            |
-  |    AUDIO_CHUNK (WAV)    <--  Nova Sonic (bidirectional stream)
-  |    TURN_TEXT             <--  Text from Sonic's textOutput events
-  |    SESSION_END               |
-  |    SYNTHESIS_CHUNK      <--  Nova Pro (post-debate synthesis)
+User enters topic
+  │
+  ├─ Nova Lite      → classify intent, assign format (debate / podcast / crossfire / ...)
+  ├─ Nova Pro       → generate opposed positions for Agent A and Agent B
+  ├─ Brave Search   → (optional) ground agents on live sources
+  │
+  └─ Turn loop
+       │
+       ├─ [Turn 1 - Agent A]
+       │    open Nova Sonic bidirectional WebSocket
+       │    send: system prompt (A's position) + topic as user input + silence frames
+       │    receive: audioOutput → ~100ms WAV chunks → browser WebSocket → AudioContext
+       │    receive: textOutput → transcript line + input for Agent B's turn
+       │    close session
+       │
+       ├─ [Turn 2 - Agent B]
+       │    open Nova Sonic bidirectional WebSocket
+       │    send: system prompt (B's position) + A's argument as user input + silence frames
+       │    receive: audioOutput + textOutput  (same flow)
+       │    close session
+       │
+       ├─ [Turn 3 - Agent A]  ... and so on
+       │
+       └─ Nova Pro  → post-debate synthesis streamed to browser
 ```
 
-### Sonic Agent Mode (default)
-
-Nova Sonic operates as a **full conversational agent**, not a text-to-speech engine. Each agent receives a debate-oriented system prompt with its assigned position and format rules. The user text input contains the opponent's last argument (or the opening topic). Sonic generates its own response — both the words and the voice — with natural prosody, emphasis, and conversational rhythm.
-
-Audio streams to the client in ~200ms PCM-buffered WAV chunks. The transcript is extracted from Sonic's `textOutput` events. Time-to-first-audio is typically under 1 second.
-
-### Fallback: Browser TTS
-
-Set `SONIC_AGENT_MODE=false` and `BROWSER_TTS_ENABLED=true` to fall back to: Nova Pro generates text, Browser Web Speech API reads it aloud. No AWS audio costs, instant availability, robotic voice.
+---
 
 ## Features
 
-- **35 conversation modes** across debate, argument, teaching, and podcast categories
-- **Real-time streaming audio** — WAV chunks over WebSocket, no polling
-- **Live transcript** — text appears as each agent speaks
-- **Moderator injection** — type a question mid-conversation to redirect the debate
-- **Web search integration** — agents can fact-check claims via Brave Search
-- **Post-debate synthesis** — structured analysis streamed after the final turn
-- **Opposed position generation** — Nova Pro pre-assigns clear, opposed stances before the debate starts
-- **Pause/resume and volume controls**
-- **Topic library** — curated starter topics across categories
+- **Real-time voice debate** — two agents, opposing positions, live audio streamed to your browser
+- **Natural speech** — Nova Sonic generates its own words with contractions, emphasis, and pacing
+- **35 conversation formats** — structured debate, argument, teaching, rapid crossfire, podcast, and more
+- **Moderator injection** — type a question or redirect mid-debate without breaking flow
+- **Live web grounding** — Brave Search surfaces relevant sources before the debate starts
+- **Post-debate analysis** — Nova Pro synthesizes key arguments and a verdict after the session ends
+- **Gap-free audio playback** — Web Audio API with hardware-clock scheduling, serialized decode chain
+- **Pause/resume** — full stop on both agents, server-side turn advancement held until you resume
 
-## Stack
+---
 
-- **Frontend**: Next.js 14 App Router, React, TypeScript
-- **Backend**: Custom Node.js server (Next.js + WebSocket upgrade on `/ws`)
-- **AI Models**:
-  - Amazon Nova Lite — intent classification (tool calling)
-  - Amazon Nova Sonic — real-time voice agent (bidirectional streaming)
-  - Amazon Nova Pro — dialog generation (fallback), position assignment, post-debate synthesis
-- **APIs**: Brave Search (web search tool for fact-checking)
-- **Infra**: AWS SDK v3 Bedrock Runtime, in-memory session store
+## Running it yourself
 
-## Project Structure
+### Prerequisites
 
-```
-app/                        Next.js pages + API routes
-  api/classify/             Intent classification endpoint
-  api/start/                Session creation endpoint
-  page.tsx                  Main UI — WebSocket client, audio playback, transcript
-components/                 React components
-  AgentStage.tsx            Live debate viewport (avatars, transcript, synthesis)
-  PlayerControls.tsx        Pause, volume, moderator injection
-  LandingHero.tsx           Landing section with animated entry
-  TopicLibrary.tsx          Curated topic browser
-  WaveformVisualizer.tsx    Audio waveform animation
-lib/                        Shared logic
-  bedrock/audio.ts          Nova Sonic bidirectional streaming (TTS + Agent modes)
-  bedrock/dialog.ts         Nova Pro dialog turn generation
-  bedrock/positions.ts      Opposed position generation
-  bedrock/synthesis.ts      Post-debate synthesis generation
-  bedrock/classifier.ts     Intent classification with tool calling
-  prompts.ts                All system/user prompt builders
-  config.ts                 Runtime configuration from env vars
-  modes.ts                  35 conversation mode definitions
-  session-store.ts          In-memory session state management
-  brave-search.ts           Brave Search API client
-server/                     Custom Node server
-  orchestrator/             Turn loop, audio streaming, synthesis pipeline
-  ws/                       WebSocket server and protocol types
-```
+- Node.js 18+
+- AWS account with Bedrock access and `nova-2-sonic-v1:0` enabled in `us-east-1`
+- Brave Search API key (optional — without it, agents argue from priors only)
 
-## Environment Variables
+### Environment setup
 
-Create `.env` in the repo root:
+Create a `.env` file at the project root:
 
-```bash
+```env
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=YOUR_KEY
-AWS_SECRET_ACCESS_KEY=YOUR_SECRET
-
-# Model IDs
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
 BEDROCK_MODEL_ID_INTENT=us.amazon.nova-lite-v1:0
 BEDROCK_MODEL_ID_DIALOG=us.amazon.nova-pro-v1:0
 BEDROCK_MODEL_ID_TTS_OR_SONIC=amazon.nova-2-sonic-v1:0
+BRAVE_SEARCH_API_KEY=your_brave_key
 
-# Web search
-BRAVE_SEARCH_API_KEY=YOUR_BRAVE_API_KEY
-
-# Audio routing (pick one mode)
-SONIC_AGENT_MODE=true          # Sonic as conversational agent (recommended)
-BROWSER_TTS_ENABLED=true       # Fallback: browser Web Speech API
+# Recommended: Sonic generates its own text + audio
+SONIC_AGENT_MODE=true
 
 # Optional tuning
 CONVERSATION_TOTAL_TURNS=8
-CONVERSATION_MAX_SECONDS_PER_TURN=28
-CONVERSATION_MAX_DURATION_SECONDS=210
 AGENT_A_VOICE=matthew
 AGENT_B_VOICE=amy
 ```
 
-### Mode Priority
+**Audio mode options:**
 
-| `SONIC_AGENT_MODE` | `BROWSER_TTS_ENABLED` | Behavior |
+| `SONIC_AGENT_MODE` | `BROWSER_TTS_ENABLED` | What happens |
 |---|---|---|
-| `true` | any | Sonic generates text + audio. Browser TTS skipped. |
-| `false` | `true` | Nova Pro generates text. Browser speaks it. |
+| `true` | any | Nova Sonic generates text + audio. Recommended. |
+| `false` | `true` | Nova Pro generates text. Browser Web Speech API reads it. Free, robotic. |
 | `false` | `false` | Nova Pro generates text. Server synthesizes audio via Sonic TTS. |
 
-## Run Locally
+### Local dev
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`, pick a topic, hit Start.
 
-## Build and Start
+### Docker
 
 ```bash
-npm run build
-npm start
+docker build -t pocketpanel .
+docker run -p 3000:3000 --env-file .env pocketpanel
 ```
 
-## WebSocket Protocol
+---
 
-Client connects to `ws://<host>/ws?sessionId=<id>`.
+## Built with
 
-### Server Events
+- Amazon Nova Lite, Nova Sonic, Nova Pro (via Amazon Bedrock)
+- Brave Search API
+- Next.js 14, React, TypeScript
+- Node.js WebSocket server
+- Web Audio API
+- Tailwind CSS
+- Railway (deployment)
 
-| Event | Description |
-|---|---|
-| `SESSION_READY` | Session initialized, mode confirmed |
-| `SPEAKER_CHANGE` | Agent A or B is about to speak |
-| `TURN_TEXT` | Full transcript text for the turn |
-| `AUDIO_CHUNK` | Base64 WAV audio with ordering metadata |
-| `TOOL_USE` | Agent is performing a web search |
-| `TOOL_RESULT` | Web search results returned |
-| `SYNTHESIS_CHUNK` | Post-debate synthesis text (streamed) |
-| `SESSION_END` | Conversation finished |
-| `ERROR` | Something went wrong |
+---
 
-### Client Events
+## What's next
 
-| Event | Description |
-|---|---|
-| `USER_INJECT` | Moderator question injected mid-conversation |
-| `CLIENT_SPEECH_DONE` | Browser TTS finished speaking (Browser TTS mode only) |
-
-## Example Topics
-
-- **Debate**: "Should remote work be the default for knowledge workers?"
-- **Argument**: "Argue both sides of banning smartphones in schools."
-- **Teaching**: "Teach me how neural networks learn, like I'm a first-year CS student."
-- **Podcast**: "Host a podcast episode about whether AI will replace software engineers."
-
-## Notes
-
-- One active session per browser tab.
-- No user barge-in or interruption — listen-only by design.
-- In-memory session store; sessions are lost on server restart.
-- Sonic voice IDs: `matthew`, `tiffany`, `amy`, `olivia`, `lupe`, `carlos`, `ambre`, `florian`, `lennart`, `beatrice`, `lorenzo`, `tina`, `carolina`, `leo`, `kiara`, `arjun`.
+Custom voices — letting users pick agents that sound like specific characters or personas. Domain-specific agents tuned for law, medicine, or finance. Multi-language debates. Audience voting that shifts agent behavior mid-debate. The orchestration layer is already multi-agent; scaling is an orchestration problem, not a rewrite.
