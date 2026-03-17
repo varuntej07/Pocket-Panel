@@ -4,6 +4,8 @@ import { generateDialogTurn } from "../../lib/bedrock/dialog";
 import { generatePositions } from "../../lib/bedrock/positions";
 import { generateSynthesis } from "../../lib/bedrock/synthesis";
 import { appConfig } from "../../lib/config";
+import { logEvent } from "../../lib/db/queries/events";
+import { updateSynthesisText } from "../../lib/db/queries/transcripts";
 import { buildSonicAgentSystemPrompt, buildSonicAgentUserPrompt } from "../../lib/prompts";
 import {
   appendSessionTurn,
@@ -131,7 +133,7 @@ const streamSegmentAudio = async (params: {
   }
 };
 
-const streamSynthesis = async (sessionId: string): Promise<void> => {
+const streamSynthesisWithCapture = async (sessionId: string, onText?: (chunk: string) => void): Promise<void> => {
   const session = getSession(sessionId);
   if (!session) {
     return;
@@ -148,6 +150,7 @@ const streamSynthesis = async (sessionId: string): Promise<void> => {
     let hasChunks = false;
     for await (const chunk of generateSynthesis(session.prompt, session.mode, session.turns)) {
       hasChunks = true;
+      onText?.(chunk);
       trySendEvent(sessionId, {
         type: "SYNTHESIS_CHUNK",
         text: chunk,
@@ -194,6 +197,8 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
       positionA: positions.positionA,
       positionB: positions.positionB
     });
+
+    void logEvent({ sessionId: sessionId, eventType: "session_started", metadata: { position_a: positions.positionA, position_b: positions.positionB, mode_id: session.mode.id } }).catch(() => {});
 
     const deadlineMs = Date.now() + appConfig.conversation.maxDurationSeconds * 1000;
 
@@ -299,6 +304,8 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           userPromptLength: userPrompt.length
         });
 
+        void logEvent({ sessionId: sessionId, eventType: "sonic_agent_invoked", metadata: { speaker, turn_index: turnIndex, voice_id: voiceId, system_prompt_length: systemPrompt.length } }).catch(() => {});
+
         const result = await invokeSonicAsAgent(
           { systemPrompt, userPrompt, voiceId },
           {
@@ -350,6 +357,8 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           totalAudioBytes: result.totalAudioBytes,
           textPreview: finalText.slice(0, 180)
         });
+
+        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: finalText.length, audio_bytes: result.totalAudioBytes, voice_id: voiceId, mode: "sonic_agent" } }).catch(() => {});
       } else {
         // ── Text LLM + TTS path  ──
         const turnText = await generateDialogTurn(
@@ -388,6 +397,8 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
           turnTextLength: turnText.length,
           turnTextPreview: turnText.slice(0, 180)
         });
+
+        void logEvent({ sessionId: sessionId, eventType: "turn_completed", metadata: { speaker, turn_index: turnIndex, text_length: turnText.length, mode: process.env.BROWSER_TTS_ENABLED === "true" ? "browser_tts" : "server_tts" } }).catch(() => {});
 
         if (process.env.BROWSER_TTS_ENABLED === "true") {
           const wordCount = turnText.trim().split(/\s+/).length;
@@ -450,8 +461,17 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
     markSessionEnded(sessionId, "completed");
     logInfo("orchestrator", "Session completed", { sessionId });
 
+    const completedSession = getSession(sessionId);
+    void logEvent({ sessionId: sessionId, eventType: "session_completed", metadata: { total_turns: completedSession?.turns.length ?? 0 } }).catch(() => {});
+
     // Stream post-debate synthesis after SESSION_END
-    await streamSynthesis(sessionId);
+    const synthesisStart = Date.now();
+    let synthesisText = "";
+    await streamSynthesisWithCapture(sessionId, (text) => { synthesisText += text; });
+    if (synthesisText) {
+      void updateSynthesisText(sessionId, synthesisText).catch(() => {});
+      void logEvent({ sessionId: sessionId, eventType: "synthesis_completed", metadata: { synthesis_length: synthesisText.length, duration_ms: Date.now() - synthesisStart } }).catch(() => {});
+    }
   } catch (error) {
     const baseMessage = error instanceof Error ? error.message : String(error);
     const causeMessage = error instanceof Error && error.cause instanceof Error ? error.cause.message : null;
@@ -463,6 +483,9 @@ const runSessionConversation = async (sessionId: string): Promise<void> => {
       sessionId,
       ...toErrorMetadata(error)
     });
+
+    const errorSession = getSession(sessionId);
+    void logEvent({ sessionId: sessionId, eventType: "session_error", metadata: { error_message: message, turn_index: errorSession?.turns.length ?? 0 } }).catch(() => {});
 
     const socket = getLiveSocket(sessionId);
     if (socket) {

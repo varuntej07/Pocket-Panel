@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { appConfig } from "./config";
+import { updateSessionStatus, updateSessionTurns, upsertSession } from "./db/queries/debates";
+import { logEvent } from "./db/queries/events";
+import { insertTurn } from "./db/queries/turns";
+import { upsertTranscript } from "./db/queries/transcripts";
+import { logError } from "./telemetry";
 import type { ModeSuggestion, SessionState, SessionTurn, Speaker } from "./types";
 
 interface SessionStoreShape {
@@ -24,6 +29,7 @@ const pruneExpiredSessions = (): void => {
   const cutoff = Date.now() - appConfig.conversation.sessionTtlMs;
   for (const [sessionId, session] of globalStore.sessions.entries()) {
     if (session.updatedAt < cutoff) {
+      void logEvent({ sessionId, eventType: "session_expired", metadata: { age_ms: Date.now() - session.createdAt, turn_count: session.turns.length } }).catch(() => {});
       globalStore.sessions.delete(sessionId);
     }
   }
@@ -45,6 +51,10 @@ export const createSession = (prompt: string, mode: ModeSuggestion): SessionStat
     started: false
   };
   globalStore.sessions.set(sessionId, state);
+
+  void upsertSession(state).catch((err) => logError("session-store", "upsertSession failed on create", { sessionId, error: String(err) }));
+  void logEvent({ sessionId, eventType: "session_created", metadata: { prompt_length: prompt.length, mode_id: mode.id, mode_category: mode.category } }).catch(() => {});
+
   return state;
 };
 
@@ -76,6 +86,8 @@ export const markSessionStarted = (sessionId: string): void => {
   session.started = true;
   session.status = "running";
   touch(session);
+
+  void updateSessionStatus(sessionId, "running").catch((err) => logError("session-store", "updateSessionStatus failed on start", { sessionId, error: String(err) }));
 };
 
 export const markSessionError = (sessionId: string, errorMessage: string): void => {
@@ -86,6 +98,8 @@ export const markSessionError = (sessionId: string, errorMessage: string): void 
   session.status = "error";
   session.lastError = errorMessage;
   touch(session);
+
+  void updateSessionStatus(sessionId, "error", { lastError: errorMessage }).catch((err) => logError("session-store", "updateSessionStatus failed on error", { sessionId, error: String(err) }));
 };
 
 export const markSessionEnded = (sessionId: string, reason: string): void => {
@@ -96,6 +110,13 @@ export const markSessionEnded = (sessionId: string, reason: string): void => {
   session.status = "ended";
   session.endedReason = reason;
   touch(session);
+
+  void updateSessionStatus(sessionId, "ended", { endedReason: reason, endedAt: new Date() }).catch((err) => logError("session-store", "updateSessionStatus failed on end", { sessionId, error: String(err) }));
+
+  // Persist transcript on normal end
+  if (reason === "completed" && session.turns.length > 0) {
+    void upsertTranscript(sessionId, session.turns).catch((err) => logError("session-store", "upsertTranscript failed", { sessionId, error: String(err) }));
+  }
 };
 
 export const appendSessionTurn = (
@@ -116,6 +137,10 @@ export const appendSessionTurn = (
   };
   session.turns.push(turn);
   touch(session);
+
+  void insertTurn({ sessionId, speaker, text, turnIndex }).catch((err) => logError("session-store", "insertTurn failed", { sessionId, error: String(err) }));
+  void updateSessionTurns(sessionId, session.turns.length).catch((err) => logError("session-store", "updateSessionTurns failed", { sessionId, error: String(err) }));
+
   return turn;
 };
 
