@@ -113,7 +113,17 @@ export const attachWebSocketServer = (server: HttpServer): void => {
       })
       .catch(() => {});
 
+    // Send periodic pings to keep the connection alive through Railway's proxy.
+    // Without this, Railway's load balancer closes idle WebSocket connections
+    // during long Sonic invocations (silence frames + audio generation can take 30s+).
+    const keepaliveInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 25_000);
+
     ws.on("close", (code: number, reasonBuffer: Buffer) => {
+      clearInterval(keepaliveInterval);
       clearSessionSocket(sessionId);
       const current = getSession(sessionId);
       if (current && (current.status === "created" || current.status === "running")) {
