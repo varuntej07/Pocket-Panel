@@ -1,4 +1,4 @@
-# PocketPanel
+# PocketPanel (https://builder.aws.com/content/3B2oCnsVJ6IyhMeXgUfOYjlloc4/pocket-panel-two-voice-agents-debating-live)
 
 Two AI agents. One topic. They argue. You listen.
 
